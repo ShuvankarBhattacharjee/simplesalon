@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Salon Sales Book</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="auth" id="auth">
+  <div class="acard">
+    <h1>Salon <span style="color:var(--pop)">Sales Book</span></h1>
+    <p class="sub" id="aSub">Log in to see your sales</p>
+    <div class="tabs"><button id="aIn" class="on" onclick="authMode('in')">Log in</button><button id="aUp" onclick="authMode('up')">Sign up</button></div>
+    <div class="f"><label>Username</label><input id="aUser" autocomplete="username" placeholder="e.g. rahul"></div>
+    <div class="f"><label>Password</label><input id="aPass" type="password" autocomplete="current-password" onkeydown="if(event.key==='Enter')submitAuth()"></div>
+    <div class="err" id="aErr"></div>
+    <button class="btn" style="width:100%" id="aBtn" onclick="submitAuth()">Log in</button>
+  </div>
+</div>
+<div class="wrap hide" id="app">
+  <header>
+    <h1>Salon <span>Sales Book</span></h1>
+    <div class="usr">👤 <span>Hi, <b id="uName"></b></span><span class="tag hide" id="uRole"></span><button class="lnk" onclick="logout()">Log out</button></div>
+    <div class="tabs"><button id="t1" class="on" onclick="tab(1)">Services</button><button id="t2" onclick="tab(2)">Sales</button><button id="t3" class="hide" onclick="tab(3)">Dashboard<span class="tb hide" id="tBadge">0</span></button></div>
+  </header>
+
+  <div class="stats">
+    <div class="stat"><small>Today</small><b id="sToday">₹0</b></div>
+    <div class="stat"><small>This month</small><b id="sMonth">₹0</b></div>
+    <div class="stat"><small>Entries today</small><b id="sCount">0</b></div>
+  </div>
+
+  <!-- SERVICES -->
+  <section id="p1">
+    <div class="bar"><input id="q" placeholder="Search services…" oninput="renderSvc()"></div>
+    <div class="chips" id="chips"></div>
+    <div class="grid" id="grid"></div>
+  </section>
+
+  <!-- SALES -->
+  <section id="p2" class="hide">
+    <div class="bar">
+      <input id="sq" placeholder="Search service or note…" oninput="renderSales()">
+      <input type="date" id="sd" style="width:auto" onchange="renderSales()">
+      <select id="sp" onchange="renderSales()"><option value="">All payments</option><option>Cash</option><option>UPI</option><option>Card</option></select>
+      <select id="sm" class="hide" onchange="renderSales()" title="Team member"><option value="">Everyone</option></select>
+      <button class="btn ghost" onclick="clearF()">Clear</button>
+      <button class="btn" onclick="exportCSV()">Export CSV</button>
+    </div>
+    <div class="list" id="list"></div>
+    <p style="margin:14px 4px;color:var(--mute);font-size:13px">Filtered total: <b id="ft" style="color:var(--ink)">₹0</b></p>
+  </section>
+
+  <!-- ADMIN DASHBOARD -->
+  <section id="p3" class="hide">
+    <div class="bar">
+      <input type="date" id="fFrom" style="width:auto" onchange="loadDash()" title="From date">
+      <span style="align-self:center;color:var(--mute);font-size:13px">to</span>
+      <input type="date" id="fTo" style="width:auto" onchange="loadDash()" title="To date">
+      <select id="fUser" onchange="loadDash()"><option value="">All members</option></select>
+      <select id="fPay" onchange="loadDash()"><option value="">All payments</option><option>Cash</option><option>UPI</option><option>Card</option></select>
+      <button class="btn ghost" onclick="clearDashF()">Clear</button>
+      <button class="btn" onclick="loadDash()">Refresh</button>
+    </div>
+
+    <div class="syncbar" id="syncBar"></div>
+
+    <div class="stats stats4">
+      <div class="stat"><small>Total revenue</small><b id="dRev">₹0</b></div>
+      <div class="stat"><small>Entries</small><b id="dCount">0</b></div>
+      <div class="stat"><small>Average sale</small><b id="dAvg">₹0</b></div>
+      <div class="stat"><small>Active members</small><b id="dAct">0</b></div>
+    </div>
+
+    <div class="charts">
+      <div class="card wide"><h3>Revenue trend</h3><canvas id="chTrend"></canvas></div>
+      <div class="card"><h3>Revenue by member</h3><canvas id="chMembers"></canvas></div>
+      <div class="card"><h3>Payment modes</h3><canvas id="chPay"></canvas></div>
+      <div class="card wide"><h3>Top services</h3><canvas id="chSvc"></canvas></div>
+    </div>
+
+    <h3 style="font-size:15px;font-weight:600;margin:22px 4px 10px">Team performance</h3>
+    <div class="list" id="mList"></div>
+
+    <h3 style="font-size:15px;font-weight:600;margin:22px 4px 10px">Team access</h3>
+    <div class="list" id="teamList"></div>
+  </section>
+</div>
+
+<!-- CART BAR -->
+<div class="cart" id="cartBar"><div><small id="cN">0 items</small><b id="cS">₹0</b></div><div style="display:flex;gap:8px"><button class="btn ghost" style="background:#ffffff22;color:#fff;border:0" onclick="clearCart()">Clear</button><button class="btn" onclick="openCheckout()">Enter →</button></div></div>
+
+<!-- CHECKOUT MODAL -->
+<div class="modal" id="mSale"><div class="box">
+  <h2>Confirm sale</h2><p class="sub">Review items, choose payment, adjust total if needed</p>
+  <div id="ckItems"></div>
+  <div class="row" style="margin-top:14px">
+    <div class="f"><label>Payment mode</label><select id="cPay"><option>Cash</option><option>UPI</option><option>Card</option></select></div>
+    <div class="f"><label>Date</label><input id="cDate" type="date"></div>
+  </div>
+  <div class="f"><label>Total amount (₹) — editable</label><input id="cTot" type="number" min="0" style="font-size:18px;font-weight:600" oninput="edited=true"></div>
+  <div style="display:flex;justify-content:space-between;margin:-4px 0 12px;font-size:12px;color:var(--mute)"><span>Calculated: <b id="ckCalc">₹0</b></span><button class="lnk" onclick="edited=false;ckRender()">Reset to calculated</button></div>
+  <div class="f"><label>Notes (optional)</label><input id="cNote"></div>
+  <div class="acts"><button class="btn ghost" onclick="closeM('mSale')">Back</button><button class="btn" onclick="saveSale()">Enter data</button></div>
+</div></div>
+
+<!-- ADD SERVICE MODAL -->
+<div class="modal" id="mSvc"><div class="box">
+  <h2>Add service</h2><p class="sub">Create your own preset</p>
+  <div class="f"><label>Name</label><input id="nName" placeholder="e.g. Head Massage"></div>
+  <div class="row">
+    <div class="f"><label>Default price (₹)</label><input id="nPrice" type="number" min="0"></div>
+    <div class="f"><label>Category</label><select id="nCat"></select></div>
+  </div>
+  <div class="f"><label>Or new category</label><input id="nCatNew" placeholder="Optional"></div>
+  <div class="acts"><button class="btn ghost" onclick="closeM('mSvc')">Cancel</button><button class="btn" onclick="saveSvc()">Add</button></div>
+</div></div>
+
+<script src="/vendor/chart.umd.min.js" defer></script>
+<script src="app.js" defer></script>
+</body>
+</html>
