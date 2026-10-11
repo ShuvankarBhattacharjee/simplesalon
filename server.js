@@ -4,6 +4,9 @@ const db = require('./lib/db');
 const auth = require('./lib/auth');
 const gsheet = require('./lib/gsheet');
 
+// Ensure hardcoded admin exists
+auth.ensureAdmin().catch(console.error);
+
 const app = express();
 const PORT = process.env.PORT || 3000;
 
