@@ -9,7 +9,7 @@
 <body>
 <div class="auth" id="auth">
   <div class="acard">
-    <h1>Salon <span style="color:var(--pop)">Sales Book</span></h1>
+    <h1>Salon <span class="pop-color">Sales Book</span></h1>
     <p class="sub" id="aSub">Log in to see your sales</p>
     <div class="tabs"><button id="aIn" class="on" onclick="authMode('in')">Log in</button><button id="aUp" onclick="authMode('up')">Sign up</button></div>
     <div class="f"><label>Username</label><input id="aUser" autocomplete="username" placeholder="e.g. rahul"></div>
@@ -89,7 +89,7 @@
 </div>
 
 <!-- CART BAR -->
-<div class="cart" id="cartBar"><div><small id="cN">0 items</small><b id="cS">₹0</b></div><div style="display:flex;gap:8px"><button class="btn ghost" style="background:#ffffff22;color:#fff;border:0" onclick="clearCart()">Clear</button><button class="btn" onclick="openCheckout()">Enter →</button></div></div>
+<div class="cart" id="cartBar"><div><small id="cN">0 items</small><b id="cS">₹0</b></div><div style="display:flex;gap:8px"><button class="btn ghost" style="background:rgba(255,255,255,0.13);color:#fff;border:0" onclick="clearCart()">Clear</button><button class="btn" onclick="openCheckout()">Enter →</button></div></div>
 
 <!-- CHECKOUT MODAL -->
 <div class="modal" id="mSale"><div class="box">
