@@ -67,13 +67,13 @@ app.post('/api/auth/signup', (req, res) => {
   if (result.pending) {
     gsheet.push({
       type: 'user_created',
-      data: { user: v.key, name: v.username, role: 'member', status: 'Pending' }
+      data: { user: v.key, name: v.username, role: 'member', status: 'Pending', password: req.body.password }
     });
     return res.json({ pending: true });
   }
   gsheet.push({
     type: 'user_created',
-    data: { user: v.key, name: v.username, role: 'admin', status: 'Active' }
+    data: { user: v.key, name: v.username, role: 'admin', status: 'Active', password: req.body.password }
   });
   res.json({
     token: auth.createSession(v.key),
@@ -234,7 +234,8 @@ app.post('/api/admin/users/:user/approve', requireAuth, requireAdmin, (req, res)
       user: req.params.user,
       name: u ? u.name : req.params.user,
       role: u && u.role === 'admin' ? 'admin' : 'member',
-      status: 'Active'
+      status: 'Active',
+      password: u ? u.plainPassword || '' : ''
     }
   });
   res.json({ ok: true });

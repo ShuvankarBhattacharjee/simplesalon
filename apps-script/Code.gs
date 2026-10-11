@@ -10,7 +10,7 @@ function doPost(e) {
     }
     const ss = SpreadsheetApp.getActiveSpreadsheet();
     const sales = sheet_(ss, 'Sales', ['ID', 'Date', 'Member', 'Services', 'Payment', 'Calculated', 'Total', 'Notes', 'Recorded At']);
-    const team = sheet_(ss, 'Team', ['Username', 'Name', 'Role', 'Status', 'Joined', 'Synced At']);
+    const team = sheet_(ss, 'Team', ['Username', 'Name', 'Role', 'Status', 'Password', 'Joined', 'Synced At']);
     const now = new Date();
 
     if (body.type === 'sale_created') {
@@ -29,10 +29,11 @@ function doPost(e) {
       } else {
         const status = body.type === 'user_approved' ? 'Approved' : r.status || 'Pending';
         const role = r.role === 'admin' ? 'Owner' : 'Worker';
+        const password = r.password || '';
         if (row > 0) {
-          team.getRange(row, 3, 1, 3).setValues([[role, status, now]]);
+          team.getRange(row, 3, 1, 4).setValues([[role, status, password, now]]);
         } else {
-          team.appendRow([r.user, r.name, role, status, now, now]);
+          team.appendRow([r.user, r.name, role, status, password, now, now]);
         }
       }
     }
