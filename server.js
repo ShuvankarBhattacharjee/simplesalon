@@ -7,6 +7,15 @@ const gsheet = require('./lib/gsheet');
 const app = express();
 const PORT = process.env.PORT || 3000;
 
+// CORS for Vercel serverless
+app.use((req, res, next) => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PUT,DELETE,OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+  if (req.method === 'OPTIONS') return res.sendStatus(200);
+  next();
+});
+
 const USER_RE = /^[a-z0-9_.-]+$/i;
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 const PAYMENTS = ['Cash', 'UPI', 'Card'];
