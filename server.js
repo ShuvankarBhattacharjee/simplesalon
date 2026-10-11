@@ -390,6 +390,12 @@ app.delete('/api/sales/:id', requireAuth, (req, res) => {
   res.json({ ok: true });
 });
 
-app.listen(PORT, () => {
-  console.log(`Salon Sales Book running at http://localhost:${PORT}`);
-});
+// For local development
+if (require.main === module) {
+  app.listen(PORT, () => {
+    console.log(`Salon Sales Book running at http://localhost:${PORT}`);
+  });
+}
+
+// For Vercel serverless
+module.exports = app;
