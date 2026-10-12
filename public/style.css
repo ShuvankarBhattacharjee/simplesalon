@@ -666,6 +666,7 @@ input:focus, select:focus, textarea:focus {
 .del:hover { color: #dc2626; background: #fee2e2; }
 .empty { text-align: center; color: var(--mute); padding: 36px 10px; font-size: 13.5px; }
 .hide { display: none !important; }
+html.has-auth #auth { display: none !important; }
 
 /* ---- AUTH SCREEN ---- */
 .auth {

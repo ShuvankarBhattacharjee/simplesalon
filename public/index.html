@@ -15,9 +15,26 @@ if ('serviceWorker' in navigator) {
     for (var i = 0; i < regs.length; i++) regs[i].unregister();
   });
 }
+try {
+  if (localStorage.getItem('token')) {
+    document.documentElement.classList.add('has-auth');
+  }
+} catch(e) {}
 </script>
 </head>
 <body>
+<div class="auth hide" id="appSplash">
+  <div class="acard" style="text-align:center">
+    <div class="brand-badge">✂️ SIMPLE SALON</div>
+    <h1 style="margin-top:8px">Salon <span class="pop-color">Sales Book</span></h1>
+    <p class="sub" id="splashSub" style="margin-bottom:18px">Restoring session…</p>
+    <div id="splashSpinner" class="btn-spinner" style="margin:20px auto;border-color:var(--pop);border-right-color:transparent;width:28px;height:28px;border-width:3px"></div>
+    <div id="splashActions" class="hide" style="margin-top:16px;display:flex;gap:10px">
+      <button class="btn" style="flex:1" onclick="initSession()">Retry</button>
+      <button class="btn ghost" style="flex:1" onclick="logout()">Log out</button>
+    </div>
+  </div>
+</div>
 <div class="auth" id="auth">
   <div class="acard">
     <div class="brand-badge">✂️ SIMPLE SALON</div>

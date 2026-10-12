@@ -199,8 +199,12 @@ app.post('/api/auth/login', async (req, res) => {
   });
 });
 
-app.post('/api/auth/logout', requireAuth, (req, res) => {
-  auth.destroySession(req.token);
+app.post('/api/auth/logout', (req, res) => {
+  const header = req.headers.authorization || '';
+  const token = header.startsWith('Bearer ') ? header.slice(7) : null;
+  if (token) {
+    auth.destroySession(token);
+  }
   res.json({ ok: true });
 });
 
@@ -215,19 +219,32 @@ app.post('/api/admin/setup', async (req, res) => {
 });
 
 app.get('/api/bootstrap', requireAuth, async (req, res) => {
-  let sales = db.getSales(req.user.username);
-  if (sales.length === 0) {
-    await hydrateSalesFromSheet();
-    sales = db.getSales(req.user.username);
+  try {
+    let sales = db.getSales(req.user.username);
+    if (sales.length === 0) {
+      // Guard against Google Sheets delays with a 4s timeout
+      try {
+        await Promise.race([
+          hydrateSalesFromSheet(),
+          new Promise((_, reject) => setTimeout(() => reject(new Error('Hydration timeout')), 4000))
+        ]);
+      } catch (e) {
+        console.warn('Hydration skipped on bootstrap:', e.message);
+      }
+      sales = db.getSales(req.user.username);
+    }
+    const services = await getOrSyncServices();
+    res.json({
+      user: req.user.username,
+      name: req.user.name,
+      role: req.user.role || (auth.isAdmin(req.user.username) ? 'admin' : 'member'),
+      services,
+      sales
+    });
+  } catch (err) {
+    console.error('Bootstrap error:', err.message);
+    res.status(500).json({ error: 'Failed to load user data' });
   }
-  const services = await getOrSyncServices();
-  res.json({
-    user: req.user.username,
-    name: req.user.name,
-    role: req.user.role || (auth.isAdmin(req.user.username) ? 'admin' : 'member'),
-    services,
-    sales
-  });
 });
 
 // ---- admin dashboard ----

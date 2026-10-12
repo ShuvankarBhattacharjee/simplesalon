@@ -1,5 +1,23 @@
 // ---- api client ----
 let token = localStorage.getItem('token') || '';
+let isLoggingOut = false;
+
+function saveSessionCache(data) {
+  try {
+    const prev = JSON.parse(localStorage.getItem('cached_session') || '{}');
+    const session = {
+      user: data?.user || user || prev.user || '',
+      name: data?.name || uname || prev.name || '',
+      role: data?.role || role || prev.role || 'member',
+      status: data?.status || prev.status || 'active',
+      services: (data?.services && data.services.length) ? data.services : (services && services.length ? services : (prev.services || [])),
+      sales: (data?.sales && Array.isArray(data.sales)) ? data.sales : (sales && sales.length ? sales : (prev.sales || []))
+    };
+    if (session.user) {
+      localStorage.setItem('cached_session', JSON.stringify(session));
+    }
+  } catch {}
+}
 
 async function api(path, opts = {}) {
   try {
@@ -13,10 +31,21 @@ async function api(path, opts = {}) {
     });
     let data = {};
     try { data = await res.json(); } catch {}
-    if (!res.ok) throw new Error(data.error || 'Request failed');
+    if (!res.ok) {
+      const err = new Error(data.error || 'Request failed');
+      err.status = res.status;
+      err.code = data.code;
+      if (res.status === 401 && !path.startsWith('/api/auth/login') && !path.startsWith('/api/auth/signup') && !path.startsWith('/api/status')) {
+        err.isAuthError = true;
+        if (token && !isLoggingOut) {
+          logout('Your session has expired. Please log in again.');
+        }
+      }
+      throw err;
+    }
     return data;
   } catch (err) {
-    if (!navigator.onLine || err.name === 'TypeError' || String(err.message).includes('fetch')) {
+    if (!navigator.onLine || err.name === 'TypeError' || String(err.message).includes('fetch') || String(err.message).includes('NetworkError')) {
       err.isNetwork = true;
     }
     throw err;
@@ -366,6 +395,7 @@ async function saveSale(){
     sales.unshift(saleObj);
     if(role==='admin') allSales.unshift({...saleObj,by:user,byName:uname});
     stats(); updateNetStatus(); renderSales();
+    saveSessionCache();
     showPrompt('💾 Saved to your device — will upload when online', 'offline');
     return;
   }
@@ -379,6 +409,7 @@ async function saveSale(){
     if(role==='admin')allSales.unshift({...sale,by:user,byName:uname});
     stats();
     renderSales();
+    saveSessionCache();
     updateNetStatus();
     showPrompt('✓ Data saved & uploaded to Google Sheet!', 'success');
     syncPendingSales();
@@ -389,6 +420,7 @@ async function saveSale(){
       sales.unshift(saleObj);
       if(role==='admin') allSales.unshift({...saleObj,by:user,byName:uname});
       stats(); updateNetStatus(); renderSales();
+      saveSessionCache();
       showPrompt('💾 Saved to your device — will upload when online', 'offline');
     } else {
       showPrompt('✕ Error: ' + e.message, 'error', 5000);
@@ -646,7 +678,8 @@ async function delSale(id){
     allSales=allSales.filter(x=>!(x.id===id&&x.by===(s?s.by:user)));
     removeFromOfflineQueue(id);
     sheetConfirmedIds.delete(String(id));
-    renderSales();stats()
+    renderSales();stats();
+    saveSessionCache();
   }catch(e){alert(e.message)}
 }
 function clearF(){$('sq').value='';$('sd').value='';$('sp').value='';if(role==='admin')$('sm').value='';showOnlyNotUploaded=false;updateFilterBtn();renderSales()}
@@ -915,6 +948,8 @@ async function submitAuth(){
     btn.innerHTML = `<span>✓ Verified</span>`;
     token = r.token;
     localStorage.setItem('token', token);
+    saveSessionCache(r);
+    document.documentElement.classList.add('has-auth');
     setTimeout(() => {
       btn.disabled = false;
       btn.classList.remove('btn-loading');
@@ -928,9 +963,20 @@ async function submitAuth(){
     e(err.message);
   }
 }
-function start(d){
-  user=d.user;uname=d.name;role=d.role||'member';custom=d.custom||[];sales=norm(d.sales);allSales=norm(d.sales);cart={};cat='All';
-  if(d.services && Array.isArray(d.services) && d.services.length){
+
+function start(d, opts = {}){
+  user = d.user;
+  uname = d.name;
+  role = d.role || 'member';
+  custom = d.custom || [];
+  sales = norm(d.sales);
+  allSales = norm(d.sales);
+  if (!opts.fromCache) {
+    cart = {};
+  }
+  cat = 'All';
+
+  if (d.services && Array.isArray(d.services) && d.services.length) {
     services = d.services;
     localStorage.setItem('cached_services', JSON.stringify(services));
   }
@@ -938,37 +984,220 @@ function start(d){
   sheetConfirmedIds = loadCachedConfirmedIds();
   sheetIdsFetched = sheetConfirmedIds.size > 0;
   showOnlyNotUploaded = false;
-  $('t3').classList.toggle('hide',role!=='admin');
+  $('t3').classList.toggle('hide', role !== 'admin');
   $('tBadge').classList.add('hide');
-  $('uRole').textContent=role==='admin'?'Owner':'Worker';
-  $('uRole').className='tag'+(role==='admin'?'':' w');
-  $('sm').classList.toggle('hide',role!=='admin');
-  $('sm').value='';
-  $('auth').classList.add('hide');$('app').classList.remove('hide');$('uName').textContent=d.name;
-  $('aUser').value='';$('aPass').value='';$('aErr').textContent='';$('aErr').className='err';
-  tab(1);renderSvc();stats();updateCart();
+  $('uRole').textContent = role === 'admin' ? 'Owner' : 'Worker';
+  $('uRole').className = 'tag' + (role === 'admin' ? '' : ' w');
+  $('sm').classList.toggle('hide', role !== 'admin');
+  $('sm').value = '';
+
+  const splash = $('appSplash');
+  if (splash) splash.classList.add('hide');
+  $('auth').classList.add('hide');
+  $('app').classList.remove('hide');
+  $('uName').textContent = d.name;
+  document.documentElement.classList.add('has-auth');
+
+  $('aUser').value = '';
+  $('aPass').value = '';
+  $('aErr').textContent = '';
+  $('aErr').className = 'err';
+
+  tab(1);
+  renderSvc();
+  stats();
+  updateCart();
   updateNetStatus();
   syncPendingSales();
-  if(role==='admin'){
+  if (role === 'admin') {
     refreshTeamUsers();
     loadAllSales();
   }
   setTimeout(fetchSheetIds, 1500);
+  saveSessionCache(d);
 }
-async function logout(){
-  try{await api('/api/auth/logout',{method:'POST'})}catch{}
-  token='';localStorage.removeItem('token');user='';role='member';cart={};allSales=[];teamUsers=[];
-  sheetConfirmedIds=new Set();sheetIdsFetched=false;showOnlyNotUploaded=false;
-  $('t3').classList.add('hide');$('tBadge').classList.add('hide');$('uRole').className='tag hide';
-  $('sm').classList.add('hide');$('sm').value='';
-  updateCart();
-  $('app').classList.add('hide');$('auth').classList.remove('hide');authMode('in');
-}
-(async function(){
-  fetchServices();
-  if(token){
-    try{start(await api('/api/bootstrap'));return}
-    catch{token='';localStorage.removeItem('token')}
+
+function applyFreshData(d) {
+  uname = d.name || uname;
+  role = d.role || role;
+  $('uName').textContent = uname;
+  $('uRole').textContent = role === 'admin' ? 'Owner' : 'Worker';
+  $('uRole').className = 'tag' + (role === 'admin' ? '' : ' w');
+  $('t3').classList.toggle('hide', role !== 'admin');
+  $('sm').classList.toggle('hide', role !== 'admin');
+
+  if (d.services && Array.isArray(d.services) && d.services.length) {
+    services = d.services;
+    localStorage.setItem('cached_services', JSON.stringify(services));
+    renderSvc();
   }
+  if (d.sales && Array.isArray(d.sales)) {
+    // Preserve local queued sales that haven't synced yet
+    const q = getOfflineQueue();
+    const serverIds = new Set(d.sales.map(s => String(s.id)));
+    const pendingSales = q.filter(s => !serverIds.has(String(s.id)));
+    sales = norm([...pendingSales, ...d.sales]);
+    allSales = norm([...pendingSales, ...d.sales]);
+    renderSales();
+    stats();
+  }
+  updateNetStatus();
+  syncPendingSales();
+  if (role === 'admin') {
+    refreshTeamUsers();
+    loadAllSales();
+  }
+  setTimeout(fetchSheetIds, 1500);
+  saveSessionCache(d);
+}
+
+async function logout(message){
+  isLoggingOut = true;
+  const oldToken = token;
+  token = '';
+  try {
+    localStorage.removeItem('token');
+    localStorage.removeItem('cached_session');
+  } catch {}
+  document.documentElement.classList.remove('has-auth');
+
+  user = '';
+  uname = '';
+  role = 'member';
+  cart = {};
+  allSales = [];
+  teamUsers = [];
+  sheetConfirmedIds = new Set();
+  sheetIdsFetched = false;
+  showOnlyNotUploaded = false;
+
+  $('t3').classList.add('hide');
+  $('tBadge').classList.add('hide');
+  $('uRole').className = 'tag hide';
+  $('sm').classList.add('hide');
+  $('sm').value = '';
+  updateCart();
+
+  $('app').classList.add('hide');
+  hideSplash();
+  $('auth').classList.remove('hide');
   authMode('in');
-})();
+
+  $('aPass').value = '';
+  if (message) {
+    $('aErr').textContent = message;
+    $('aErr').className = 'err shake';
+  } else {
+    $('aErr').textContent = '';
+    $('aErr').className = 'err';
+  }
+
+  isLoggingOut = false;
+
+  if (oldToken) {
+    try {
+      fetch('/api/auth/logout', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer ' + oldToken
+        }
+      }).catch(() => {});
+    } catch {}
+  }
+}
+
+function showSplash(msg) {
+  const splash = $('appSplash');
+  if (!splash) return;
+  $('auth').classList.add('hide');
+  $('app').classList.add('hide');
+  $('splashSub').textContent = msg || 'Verifying session…';
+  const sp = $('splashSpinner');
+  if (sp) sp.classList.remove('hide');
+  const act = $('splashActions');
+  if (act) act.classList.add('hide');
+  splash.classList.remove('hide');
+}
+
+function hideSplash() {
+  const splash = $('appSplash');
+  if (splash) splash.classList.add('hide');
+}
+
+function showSplashError(msg) {
+  const splash = $('appSplash');
+  if (!splash) return;
+  $('splashSub').textContent = msg;
+  const sp = $('splashSpinner');
+  if (sp) sp.classList.add('hide');
+  const act = $('splashActions');
+  if (act) act.classList.remove('hide');
+  splash.classList.remove('hide');
+}
+
+async function initSession() {
+  fetchServices();
+
+  // Listen for bfcache restores or multi-tab logouts
+  window.addEventListener('pageshow', () => {
+    const currentToken = localStorage.getItem('token');
+    if (!currentToken && user) {
+      logout();
+    }
+  });
+
+  if (!token) {
+    document.documentElement.classList.remove('has-auth');
+    $('auth').classList.remove('hide');
+    $('app').classList.add('hide');
+    hideSplash();
+    authMode('in');
+    return;
+  }
+
+  // Token exists: check for cached session
+  let cached = null;
+  try {
+    cached = JSON.parse(localStorage.getItem('cached_session') || 'null');
+  } catch {}
+
+  if (cached && cached.user) {
+    // Instantly show app from cache — 0ms wait, no login screen flicker!
+    document.documentElement.classList.add('has-auth');
+    start(cached, { fromCache: true });
+  } else {
+    // Token exists but no cache yet — show minimal splash loader
+    document.documentElement.classList.add('has-auth');
+    showSplash('Starting up…');
+  }
+
+  // Background bootstrap revalidation
+  try {
+    const d = await api('/api/bootstrap');
+    hideSplash();
+    if (!user) {
+      start(d);
+    } else {
+      applyFreshData(d);
+    }
+  } catch (err) {
+    hideSplash();
+    if (err.isAuthError) {
+      // 401 Unauthorized -> token truly expired or revoked
+      logout('Your session has expired. Please log in again.');
+      return;
+    }
+    // Network or temporary server issue — DO NOT logout!
+    console.warn('Bootstrap background check notice:', err.message);
+    if (!user) {
+      // No cached session available and network failed
+      showSplashError('Unable to connect. Check internet connection.');
+    } else {
+      // User is already safely active from local cache!
+      updateNetStatus();
+    }
+  }
+}
+
+initSession();
