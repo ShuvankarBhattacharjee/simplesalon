@@ -253,7 +253,33 @@ const PRESETS=[
  {id:'p8',name:'Facial',price:900,cat:'Skin',ic:'✨'},
  {id:'p9',name:'Manicure',price:500,cat:'Nails',ic:'💅'}
 ];
-const norm=a=>(a||[]).map(s=>s.items?s:{id:s.id,items:[{name:s.service,cat:s.cat,price:s.price,qty:s.qty}],calc:s.total,total:s.total,pay:s.pay,date:s.date,note:s.note||''});
+function normSale(s) {
+  if (!s) return null;
+  let items = s.items;
+  if (!items || !Array.isArray(items) || items.length === 0) {
+    if (s.services) {
+      items = String(s.services).split(',').map(name => ({ name: name.trim(), qty: 1, price: 0 }));
+    } else if (s.service) {
+      items = [{ name: s.service, cat: s.cat, price: s.price || s.total, qty: s.qty || 1 }];
+    } else {
+      items = [{ name: 'Service', qty: 1, price: Number(s.total) || 0 }];
+    }
+  }
+  return {
+    ...s,
+    id: String(s.id),
+    items,
+    services: s.services || items.map(i => i.name + (i.qty > 1 ? ' ×' + i.qty : '')).join(', '),
+    by: s.by || (s.member ? s.member.toLowerCase() : '') || 'admin',
+    byName: s.byName || s.member || s.by || '',
+    calc: Number(s.calc != null ? s.calc : s.total) || 0,
+    total: Number(s.total) || 0,
+    pay: s.pay || 'Cash',
+    date: s.date || today(),
+    note: s.note || ''
+  };
+}
+const norm = a => (a || []).map(normSale).filter(Boolean);
 let custom=[], sales=[], cat='All', user='', uname='', role='member', dashCharts={};
 let allSales=[], teamUsers=[];
 const $=id=>document.getElementById(id);
@@ -383,7 +409,14 @@ function activeSales(){
   return v?allSales.filter(s=>s.by===v):allSales;
 }
 async function loadAllSales(){
-  try{allSales=(await api('/api/admin/sales')).sales;renderSales()}catch(e){alert(e.message)}
+  try{
+    const d = await api('/api/admin/sales');
+    allSales = norm(d.sales);
+    renderSales();
+    stats();
+  }catch(e){
+    console.warn('loadAllSales error:', e.message);
+  }
 }
 function filtered(){
   const q=$('sq').value.toLowerCase(),d=$('sd').value,p=$('sp').value;
@@ -397,7 +430,9 @@ function filtered(){
   }
   return list;
 }
-const names=s=>s.items.map(i=>i.name+(i.qty>1?' x'+i.qty:'')).join(', ');
+const names = s => (s && s.items && Array.isArray(s.items) && s.items.length)
+  ? s.items.map(i => (i.name || 'Service') + (i.qty > 1 ? ' ×' + i.qty : '')).join(', ')
+  : (s?.services || 'Service');
 
 function getUploadStatus(saleId) {
   if (isInQueue(saleId)) return 'not-uploaded';
@@ -589,9 +624,10 @@ function updateFilterBtn(){
 }
 function stats(){
   const t=today(),m=t.slice(0,7);
-  $('sToday').textContent=inr(sales.filter(s=>s.date===t).reduce((a,s)=>a+s.total,0));
-  $('sMonth').textContent=inr(sales.filter(s=>s.date.startsWith(m)).reduce((a,s)=>a+s.total,0));
-  $('sCount').textContent=sales.filter(s=>s.date===t).length;
+  const src = (role === 'admin' && allSales && allSales.length) ? allSales : sales;
+  $('sToday').textContent=inr(src.filter(s=>s.date===t).reduce((a,s)=>a+s.total,0));
+  $('sMonth').textContent=inr(src.filter(s=>s.date.startsWith(m)).reduce((a,s)=>a+s.total,0));
+  $('sCount').textContent=src.filter(s=>s.date===t).length;
 }
 function exportCSV(){
   const adminView=role==='admin';
@@ -849,7 +885,7 @@ async function submitAuth(){
   }
 }
 function start(d){
-  user=d.user;uname=d.name;role=d.role||'member';custom=d.custom||[];sales=norm(d.sales);allSales=[];cart={};cat='All';
+  user=d.user;uname=d.name;role=d.role||'member';custom=d.custom||[];sales=norm(d.sales);allSales=norm(d.sales);cart={};cat='All';
   sheetConfirmedIds = loadCachedConfirmedIds();
   sheetIdsFetched = sheetConfirmedIds.size > 0;
   showOnlyNotUploaded = false;
@@ -864,7 +900,10 @@ function start(d){
   tab(1);renderSvc();stats();updateCart();
   updateNetStatus();
   syncPendingSales();
-  if(role==='admin')refreshTeamUsers();
+  if(role==='admin'){
+    refreshTeamUsers();
+    loadAllSales();
+  }
   setTimeout(fetchSheetIds, 1500);
 }
 async function logout(){

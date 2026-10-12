@@ -161,7 +161,7 @@ if ('serviceWorker' in navigator) {
 <!-- FLOATING PROMPT TOAST -->
 <div id="toastPrompt" class="toast-prompt hide" onclick="hidePrompt()"></div>
 
-<script src="/vendor/chart.umd.min.js" defer></script>
+<script src="/vendor/chart.umd.min.js" onerror="this.onerror=null;this.src='https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js';" defer></script>
 <script src="app.js" defer></script>
 </body>
 </html>

@@ -29,6 +29,71 @@ app.use('/vendor', express.static(path.join(__dirname, 'node_modules', 'chart.js
 app.get('/favicon.ico', (req, res) => res.status(204).end());
 
 // ---- helpers ----
+function normalizeSheetSale(s) {
+  if (!s || !s.id) return null;
+  const memberName = String(s.member || s.byName || s.by || 'Admin').trim();
+  const username = String(s.by || s.user || (memberName.toLowerCase() === 'admin' ? 'admin' : memberName.toLowerCase())).trim();
+  let items = s.items;
+  if (!items || !Array.isArray(items) || items.length === 0) {
+    if (s.services) {
+      items = String(s.services).split(',').map(name => ({ name: name.trim(), qty: 1, price: 0 }));
+    } else {
+      items = [{ name: 'Service', qty: 1, price: Number(s.total) || 0 }];
+    }
+  }
+  return {
+    id: String(s.id),
+    date: s.date || new Date().toISOString().slice(0, 10),
+    member: memberName,
+    by: username,
+    byName: memberName,
+    services: s.services || items.map(i => i.name).join(', '),
+    items,
+    pay: s.pay || 'Cash',
+    calc: Number(s.calc != null ? s.calc : s.total) || 0,
+    total: Number(s.total) || 0,
+    note: s.note || ''
+  };
+}
+
+async function hydrateSalesFromSheet() {
+  try {
+    const sheetSales = await gsheet.pullSales();
+    if (!Array.isArray(sheetSales) || sheetSales.length === 0) return false;
+
+    const byUser = {};
+    const sheetIds = [];
+    const users = db.getUsers();
+
+    for (const raw of sheetSales) {
+      const s = normalizeSheetSale(raw);
+      if (!s) continue;
+      sheetIds.push(s.id);
+      const key = s.by;
+      if (!byUser[key]) byUser[key] = [];
+      byUser[key].push(s);
+      if (!users[key]) {
+        users[key] = {
+          name: s.byName,
+          role: key === 'admin' ? 'admin' : 'member',
+          status: 'active',
+          created: s.date
+        };
+      }
+    }
+
+    db.saveUsers(users);
+    for (const [key, list] of Object.entries(byUser)) {
+      db.saveSales(key, list);
+    }
+    db.markUploaded(sheetIds);
+    return true;
+  } catch (err) {
+    console.error('hydrateSalesFromSheet error:', err.message);
+    return false;
+  }
+}
+
 function requireAuth(req, res, next) {
   const header = req.headers.authorization || '';
   const token = header.startsWith('Bearer ') ? header.slice(7) : null;
@@ -40,7 +105,7 @@ function requireAuth(req, res, next) {
 }
 
 function requireAdmin(req, res, next) {
-  if (!auth.isAdmin(req.user.username))
+  if (req.user?.role !== 'admin' && !auth.isAdmin(req.user?.username))
     return res.status(403).json({ error: 'Admin access only' });
   next();
 }
@@ -86,14 +151,21 @@ app.post('/api/auth/login', async (req, res) => {
     });
   }
   const user = result.user;
+
+  let userSales = db.getSales(v.key);
+  if (userSales.length === 0) {
+    await hydrateSalesFromSheet();
+    userSales = db.getSales(v.key);
+  }
+
   res.json({
-    token: auth.createSession(v.key),
+    token: auth.createSession(v.key, user),
     user: v.key,
     name: user.name,
-    role: auth.roleOf(v.key),
+    role: user.role,
     status: user.status,
     custom: db.getCustom(v.key),
-    sales: db.getSales(v.key)
+    sales: userSales
   });
 });
 
@@ -112,13 +184,18 @@ app.post('/api/admin/setup', async (req, res) => {
   }
 });
 
-app.get('/api/bootstrap', requireAuth, (req, res) => {
+app.get('/api/bootstrap', requireAuth, async (req, res) => {
+  let sales = db.getSales(req.user.username);
+  if (sales.length === 0) {
+    await hydrateSalesFromSheet();
+    sales = db.getSales(req.user.username);
+  }
   res.json({
     user: req.user.username,
     name: req.user.name,
-    role: auth.roleOf(req.user.username),
+    role: req.user.role || (auth.isAdmin(req.user.username) ? 'admin' : 'member'),
     custom: db.getCustom(req.user.username),
-    sales: db.getSales(req.user.username)
+    sales
   });
 });
 
@@ -134,7 +211,7 @@ function daysBetween(from, to) {
   return out;
 }
 
-app.get('/api/admin/summary', requireAuth, requireAdmin, (req, res) => {
+app.get('/api/admin/summary', requireAuth, requireAdmin, async (req, res) => {
   const from = String(req.query.from || '');
   const to = String(req.query.to || '');
   const member = String(req.query.user || '');
@@ -146,7 +223,13 @@ app.get('/api/admin/summary', requireAuth, requireAdmin, (req, res) => {
   if (pay && !PAYMENTS.includes(pay))
     return res.status(400).json({ error: 'Invalid payment mode' });
 
-  const users = db.getUsers();
+  let users = db.getUsers();
+  const totalLocalSales = Object.keys(users).reduce((n, k) => n + db.getSales(k).length, 0);
+  if (totalLocalSales === 0) {
+    await hydrateSalesFromSheet();
+    users = db.getUsers();
+  }
+
   if (member && !users[member])
     return res.status(400).json({ error: 'Unknown member' });
 
@@ -179,10 +262,13 @@ app.get('/api/admin/summary', requireAuth, requireAdmin, (req, res) => {
         payMap[s.pay].total += t;
         payMap[s.pay].count++;
       }
-      for (const i of s.items || []) {
+      const items = (s.items && s.items.length)
+        ? s.items
+        : (s.services ? s.services.split(',').map(name => ({ name: name.trim(), qty: 1, price: 0 })) : []);
+      for (const i of items) {
         const name = String(i.name || 'Service');
         const line = (Number(i.price) || 0) * (Number(i.qty) || 1);
-        const share = calc > 0 ? (line / calc) * t : line;
+        const share = calc > 0 ? (line / calc) * t : (line > 0 ? line : (items.length ? t / items.length : t));
         if (!svcMap[name]) svcMap[name] = { name, qty: 0, total: 0 };
         svcMap[name].qty += Number(i.qty) || 1;
         svcMap[name].total += share;
@@ -221,7 +307,12 @@ app.get('/api/admin/summary', requireAuth, requireAdmin, (req, res) => {
 });
 
 // ---- admin: team accounts ----
-app.get('/api/admin/users', requireAuth, requireAdmin, (req, res) => {
+app.get('/api/admin/users', requireAuth, requireAdmin, async (req, res) => {
+  // On Vercel, local users may be empty after cold-start — ensure we have them
+  if (Object.keys(db.getUsers()).length === 0) {
+    try { await auth.syncFromSheet(); } catch {}
+    try { await auth.ensureAdmin(); } catch {}
+  }
   res.json({ users: auth.listUsers() });
 });
 
@@ -250,13 +341,23 @@ app.delete('/api/admin/users/:user', requireAuth, requireAdmin, (req, res) => {
 });
 
 // ---- admin: all sales ----
-app.get('/api/admin/sales', requireAuth, requireAdmin, (req, res) => {
-  const users = db.getUsers();
+app.get('/api/admin/sales', requireAuth, requireAdmin, async (req, res) => {
+  let users = db.getUsers();
+  const totalLocalSales = Object.keys(users).reduce((n, k) => n + db.getSales(k).length, 0);
+
+  if (totalLocalSales === 0) {
+    await hydrateSalesFromSheet();
+    users = db.getUsers();
+  }
+
   const out = [];
   for (const [key, u] of Object.entries(users)) {
-    for (const s of db.getSales(key)) out.push({ ...s, by: key, byName: u.name });
+    for (const s of db.getSales(key)) {
+      const norm = normalizeSheetSale({ ...s, by: key, byName: u.name });
+      if (norm) out.push(norm);
+    }
   }
-  out.sort((a, b) => String(b.date).localeCompare(String(a.date)) || b.id - a.id);
+  out.sort((a, b) => String(b.date).localeCompare(String(a.date)) || Number(b.id) - Number(a.id));
   res.json({ sales: out });
 });
 
@@ -380,6 +481,7 @@ app.post('/api/sales', requireAuth, async (req, res) => {
       id: sale.id,
       date: sale.date,
       member: req.user.name,
+      by: req.user.username,
       services: sale.items
         .map(i => i.name + (i.qty > 1 ? ' ×' + i.qty : ''))
         .join(', '),

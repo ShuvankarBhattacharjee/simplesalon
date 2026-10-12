@@ -9,7 +9,7 @@ function doPost(e) {
       return out({ ok: false, error: 'Bad secret' });
     }
     const ss = SpreadsheetApp.getActiveSpreadsheet();
-    const sales = sheet_(ss, 'Sales', ['ID', 'Date', 'Member', 'Services', 'Payment', 'Calculated', 'Total', 'Notes', 'Recorded At']);
+    const sales = sheet_(ss, 'Sales', ['ID', 'Date', 'Member', 'Services', 'Payment', 'Calculated', 'Total', 'Notes', 'Recorded At', 'By']);
     // Team structure matching sheet: Name, Username, Password, Status, Joined, Synced At, Role
     const team = sheet_(ss, 'Team', ['Name', 'Username', 'Password', 'Status', 'Joined', 'Synced At', 'Role']);
     const now = new Date();
@@ -25,14 +25,14 @@ function doPost(e) {
     if (body.type === 'sale_created') {
       const r = body.data;
       if (findRowByCol_(sales, String(r.id), 1) < 0) {
-        sales.appendRow([r.id, r.date, r.member, r.services, r.pay, r.calc, r.total, r.note, now]);
+        sales.appendRow([r.id, r.date, r.member, r.services, r.pay, r.calc, r.total, r.note, now, r.by || '']);
       }
     } else if (body.type === 'sales_batch' || body.type === 'batch_sales_created') {
       const list = Array.isArray(body.data) ? body.data : [];
       for (let i = 0; i < list.length; i++) {
         const r = list[i];
         if (findRowByCol_(sales, String(r.id), 1) < 0) {
-          sales.appendRow([r.id, r.date, r.member, r.services, r.pay, r.calc, r.total, r.note, now]);
+          sales.appendRow([r.id, r.date, r.member, r.services, r.pay, r.calc, r.total, r.note, now, r.by || '']);
         }
       }
     } else if (body.type === 'sale_deleted') {
@@ -127,7 +127,7 @@ function getSheetSales_(ss) {
   if (!sales) return [];
   const last = sales.getLastRow();
   if (last < 2) return [];
-  const values = sales.getRange(2, 1, last - 1, 9).getValues();
+  const values = sales.getRange(2, 1, last - 1, 10).getValues();
   const list = [];
   for (let i = 0; i < values.length; i++) {
     const row = values[i];
@@ -141,7 +141,8 @@ function getSheetSales_(ss) {
         pay: String(row[4] || ''),
         calc: Number(row[5]) || 0,
         total: Number(row[6]) || 0,
-        note: String(row[7] || '')
+        note: String(row[7] || ''),
+        by: String(row[9] || (String(row[2] || '').toLowerCase() === 'admin' ? 'admin' : String(row[2] || '').toLowerCase())).trim()
       });
     }
   }
