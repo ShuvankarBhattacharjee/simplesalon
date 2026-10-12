@@ -1,5 +1,17 @@
 const SECRET = 'simple_salon_OS';
 
+const DEFAULT_SERVICES = [
+  ['p1', 'Haircut', 300, 'Hair', '✂️'],
+  ['p2', 'Hair Wash & Style', 200, 'Hair', '💇'],
+  ['p3', 'Hair Colour', 1200, 'Hair', '🎨'],
+  ['p4', 'Shave', 100, 'Grooming', '🪒'],
+  ['p5', 'Beard Trim', 150, 'Grooming', '🧔'],
+  ['p6', 'Spa', 1500, 'Spa', '🧖'],
+  ['p7', 'Body Massage', 1800, 'Spa', '💆'],
+  ['p8', 'Facial', 900, 'Skin', '✨'],
+  ['p9', 'Manicure', 500, 'Nails', '💅']
+];
+
 function doPost(e) {
   const lock = LockService.getScriptLock();
   lock.waitLock(30000);
@@ -10,9 +22,13 @@ function doPost(e) {
     }
     const ss = SpreadsheetApp.getActiveSpreadsheet();
     const sales = sheet_(ss, 'Sales', ['ID', 'Date', 'Member', 'Services', 'Payment', 'Calculated', 'Total', 'Notes', 'Recorded At', 'By']);
-    // Team structure matching sheet: Name, Username, Password, Status, Joined, Synced At, Role
     const team = sheet_(ss, 'Team', ['Name', 'Username', 'Password', 'Status', 'Joined', 'Synced At', 'Role']);
+    const servicesSheet = sheet_(ss, 'Services', ['ID', 'Name', 'Price', 'Category', 'Icon']);
     const now = new Date();
+
+    if (body.type === 'get_services') {
+      return out({ ok: true, services: getServices_(ss) });
+    }
 
     if (body.type === 'get_users' || body.type === 'get_team') {
       return out({ ok: true, users: getTeamUsers_(ss) });
@@ -22,7 +38,18 @@ function doPost(e) {
       return out({ ok: true, sales: getSheetSales_(ss) });
     }
 
-    if (body.type === 'sale_created') {
+    if (body.type === 'service_created') {
+      const s = body.data;
+      const row = findRowByCol_(servicesSheet, s.id, 1);
+      if (row > 0) {
+        servicesSheet.getRange(row, 1, 1, 5).setValues([[s.id, s.name, Number(s.price) || 0, s.cat || 'General', s.ic || '⭐']]);
+      } else {
+        servicesSheet.appendRow([s.id, s.name, Number(s.price) || 0, s.cat || 'General', s.ic || '⭐']);
+      }
+    } else if (body.type === 'service_deleted') {
+      const row = findRowByCol_(servicesSheet, String(body.data.id), 1);
+      if (row > 0) servicesSheet.deleteRow(row);
+    } else if (body.type === 'sale_created') {
       const r = body.data;
       if (findRowByCol_(sales, String(r.id), 1) < 0) {
         sales.appendRow([r.id, r.date, r.member, r.services, r.pay, r.calc, r.total, r.note, now, r.by || '']);
@@ -78,6 +105,9 @@ function doGet(e) {
       return out({ ok: false, error: 'Bad secret' });
     }
     const ss = SpreadsheetApp.getActiveSpreadsheet();
+    if (action === 'get_services') {
+      return out({ ok: true, services: getServices_(ss) });
+    }
     if (action === 'get_users' || action === 'get_team') {
       return out({ ok: true, users: getTeamUsers_(ss) });
     }
@@ -88,6 +118,38 @@ function doGet(e) {
   } catch (err) {
     return out({ ok: false, error: String(err) });
   }
+}
+
+function getServices_(ss) {
+  let sheet = ss.getSheetByName('Services');
+  if (!sheet) {
+    sheet = sheet_(ss, 'Services', ['ID', 'Name', 'Price', 'Category', 'Icon']);
+    for (let i = 0; i < DEFAULT_SERVICES.length; i++) {
+      sheet.appendRow(DEFAULT_SERVICES[i]);
+    }
+  }
+  const last = sheet.getLastRow();
+  if (last < 2) {
+    for (let i = 0; i < DEFAULT_SERVICES.length; i++) {
+      sheet.appendRow(DEFAULT_SERVICES[i]);
+    }
+  }
+  const rows = sheet.getRange(2, 1, sheet.getLastRow() - 1, 5).getValues();
+  const list = [];
+  for (let i = 0; i < rows.length; i++) {
+    const r = rows[i];
+    const id = String(r[0] || '').trim();
+    const name = String(r[1] || '').trim();
+    if (!name) continue;
+    list.push({
+      id: id || ('s_' + (i + 1)),
+      name: name,
+      price: Number(r[2]) || 0,
+      cat: String(r[3] || 'General').trim(),
+      ic: String(r[4] || '⭐').trim()
+    });
+  }
+  return list;
 }
 
 function getTeamUsers_(ss) {

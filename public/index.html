@@ -148,13 +148,16 @@ if ('serviceWorker' in navigator) {
 
 <!-- ADD SERVICE MODAL -->
 <div class="modal" id="mSvc"><div class="box">
-  <h2>Add service</h2><p class="sub">Create your own preset</p>
+  <h2>Add service</h2><p class="sub">Create preset — automatically syncs to Google Sheet</p>
   <div class="f"><label>Name</label><input id="nName" placeholder="e.g. Head Massage"></div>
   <div class="row">
     <div class="f"><label>Default price (₹)</label><input id="nPrice" type="number" min="0"></div>
     <div class="f"><label>Category</label><select id="nCat"></select></div>
   </div>
-  <div class="f"><label>Or new category</label><input id="nCatNew" placeholder="Optional"></div>
+  <div class="row">
+    <div class="f"><label>Or new category</label><input id="nCatNew" placeholder="Optional"></div>
+    <div class="f"><label>Emoji / Icon</label><input id="nIc" placeholder="e.g. 💆, ✂️, 💈" value="⭐"></div>
+  </div>
   <div class="acts"><button class="btn ghost" onclick="closeM('mSvc')">Cancel</button><button class="btn" onclick="saveSvc()">Add</button></div>
 </div></div>
 

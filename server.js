@@ -29,6 +29,34 @@ app.use('/vendor', express.static(path.join(__dirname, 'node_modules', 'chart.js
 app.get('/favicon.ico', (req, res) => res.status(204).end());
 
 // ---- helpers ----
+const DEFAULT_PRESETS = [
+  { id: 'p1', name: 'Haircut', price: 300, cat: 'Hair', ic: '✂️' },
+  { id: 'p2', name: 'Hair Wash & Style', price: 200, cat: 'Hair', ic: '💇' },
+  { id: 'p3', name: 'Hair Colour', price: 1200, cat: 'Hair', ic: '🎨' },
+  { id: 'p4', name: 'Shave', price: 100, cat: 'Grooming', ic: '🪒' },
+  { id: 'p5', name: 'Beard Trim', price: 150, cat: 'Grooming', ic: '🧔' },
+  { id: 'p6', name: 'Spa', price: 1500, cat: 'Spa', ic: '🧖' },
+  { id: 'p7', name: 'Body Massage', price: 1800, cat: 'Spa', ic: '💆' },
+  { id: 'p8', name: 'Facial', price: 900, cat: 'Skin', ic: '✨' },
+  { id: 'p9', name: 'Manicure', price: 500, cat: 'Nails', ic: '💅' }
+];
+
+async function getOrSyncServices() {
+  let services = db.getServices();
+  try {
+    const sheetServices = await gsheet.pullServices();
+    if (Array.isArray(sheetServices) && sheetServices.length > 0) {
+      services = sheetServices;
+      db.saveServices(services);
+    }
+  } catch {}
+  if (!services || services.length === 0) {
+    services = DEFAULT_PRESETS;
+    db.saveServices(services);
+  }
+  return services;
+}
+
 function normalizeSheetSale(s) {
   if (!s || !s.id) return null;
   const memberName = String(s.member || s.byName || s.by || 'Admin').trim();
@@ -158,13 +186,15 @@ app.post('/api/auth/login', async (req, res) => {
     userSales = db.getSales(v.key);
   }
 
+  const services = await getOrSyncServices();
+
   res.json({
     token: auth.createSession(v.key, user),
     user: v.key,
     name: user.name,
     role: user.role,
     status: user.status,
-    custom: db.getCustom(v.key),
+    services,
     sales: userSales
   });
 });
@@ -190,11 +220,12 @@ app.get('/api/bootstrap', requireAuth, async (req, res) => {
     await hydrateSalesFromSheet();
     sales = db.getSales(req.user.username);
   }
+  const services = await getOrSyncServices();
   res.json({
     user: req.user.username,
     name: req.user.name,
     role: req.user.role || (auth.isAdmin(req.user.username) ? 'admin' : 'member'),
-    custom: db.getCustom(req.user.username),
+    services,
     sales
   });
 });
@@ -414,27 +445,48 @@ app.post('/api/sync/backfill', requireAuth, requireAdmin, async (req, res) => {
   res.json({ pushed, ...gsheet.status() });
 });
 
-// ---- custom services ----
-app.post('/api/services', requireAuth, (req, res) => {
+// ---- services from Google Sheet ----
+app.get('/api/services', async (req, res) => {
+  const services = await getOrSyncServices();
+  res.json({ services });
+});
+
+app.post('/api/services', requireAuth, async (req, res) => {
   const name = String(req.body.name || '').trim();
   const price = Number(req.body.price);
   const cat = String(req.body.cat || '').trim();
+  const ic = String(req.body.ic || '⭐').trim();
   if (!name || req.body.price === '' || !Number.isFinite(price) || price < 0)
     return res.status(400).json({ error: 'Enter name and price' });
   if (!cat) return res.status(400).json({ error: 'Enter a category' });
-  const service = { id: 'c' + Date.now(), name, price, cat, custom: true };
-  const custom = db.getCustom(req.user.username);
-  custom.push(service);
-  db.saveCustom(req.user.username, custom);
+
+  const service = { id: 's_' + Date.now(), name, price, cat, ic, custom: true };
+  const current = await getOrSyncServices();
+  current.push(service);
+  db.saveServices(current);
+
+  // Sync to Google Sheet Services tab
+  await gsheet.push({
+    type: 'service_created',
+    data: service
+  });
+
   res.status(201).json(service);
 });
 
-app.delete('/api/services/:id', requireAuth, (req, res) => {
-  const custom = db.getCustom(req.user.username);
-  const next = custom.filter(s => s.id !== req.params.id);
-  if (next.length === custom.length)
+app.delete('/api/services/:id', requireAuth, async (req, res) => {
+  const current = await getOrSyncServices();
+  const next = current.filter(s => String(s.id) !== String(req.params.id));
+  if (next.length === current.length)
     return res.status(404).json({ error: 'Service not found' });
-  db.saveCustom(req.user.username, next);
+  db.saveServices(next);
+
+  // Sync deletion to Google Sheet Services tab
+  await gsheet.push({
+    type: 'service_deleted',
+    data: { id: req.params.id }
+  });
+
   res.json({ ok: true });
 });
 

@@ -242,7 +242,7 @@ setInterval(() => {
 }, 60000);
 
 // ---- services data ----
-const PRESETS=[
+const DEFAULT_PRESETS=[
  {id:'p1',name:'Haircut',price:300,cat:'Hair',ic:'✂️'},
  {id:'p2',name:'Hair Wash & Style',price:200,cat:'Hair',ic:'💇'},
  {id:'p3',name:'Hair Colour',price:1200,cat:'Hair',ic:'🎨'},
@@ -253,6 +253,22 @@ const PRESETS=[
  {id:'p8',name:'Facial',price:900,cat:'Skin',ic:'✨'},
  {id:'p9',name:'Manicure',price:500,cat:'Nails',ic:'💅'}
 ];
+let services = [];
+try {
+  const cached = JSON.parse(localStorage.getItem('cached_services') || '[]');
+  if (Array.isArray(cached) && cached.length) services = cached;
+} catch {}
+
+async function fetchServices() {
+  try {
+    const res = await api('/api/services');
+    if (res && Array.isArray(res.services) && res.services.length) {
+      services = res.services;
+      localStorage.setItem('cached_services', JSON.stringify(services));
+      renderSvc();
+    }
+  } catch {}
+}
 function normSale(s) {
   if (!s) return null;
   let items = s.items;
@@ -285,7 +301,7 @@ let allSales=[], teamUsers=[];
 const $=id=>document.getElementById(id);
 const inr=n=>'₹'+Number(n||0).toLocaleString('en-IN');
 const today=()=>new Date().toISOString().slice(0,10);
-const all=()=>[...PRESETS,...custom];
+const all=()=>(services && services.length) ? services : DEFAULT_PRESETS;
 const esc=s=>String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 
 function tab(n){tabN=n;updateCart();
@@ -300,8 +316,9 @@ function renderSvc(){
   const q=$('q').value.toLowerCase();
   const list=all().filter(s=>(cat==='All'||s.cat===cat)&&s.name.toLowerCase().includes(q));
   $('grid').innerHTML=list.map(s=>`
-    <div class="svc ${s.custom?'custom':''} ${cart[s.id]?'sel':''}" onclick="addCart('${s.id}')">
-      ${cart[s.id]?`<span class="badge">${cart[s.id]}</span>`:''}${s.custom?`<span class="x" onclick="event.stopPropagation();delSvc('${s.id}')">✕</span>`:''}
+    <div class="svc ${cart[s.id]?'sel':''}" onclick="addCart('${s.id}')">
+      ${cart[s.id]?`<span class="badge">${cart[s.id]}</span>`:''}
+      <span class="x" onclick="event.stopPropagation();delSvc('${s.id}')" title="Delete service">✕</span>
       <div class="ic">${s.ic||'⭐'}</div><h3>${esc(s.name)}</h3><p>${esc(s.cat)}</p><div class="pr">${inr(s.price)}</div>
     </div>`).join('')+`<div class="svc add" onclick="openSvc()"><div style="font-size:22px;line-height:1">＋</div><p>Add</p></div>`;
 }
@@ -379,25 +396,33 @@ async function saveSale(){
   }
 }
 
-// ---- custom services ----
+// ---- services synced with Google Sheet ----
 function openSvc(){
-  $('nName').value='';$('nPrice').value='';$('nCatNew').value='';
+  $('nName').value='';$('nPrice').value='';$('nCatNew').value='';$('nIc').value='⭐';
   $('nCat').innerHTML=cats().filter(c=>c!=='All').map(c=>`<option>${esc(c)}</option>`).join('');
   $('mSvc').classList.add('show');
 }
 async function saveSvc(){
-  const name=$('nName').value.trim(),price=+$('nPrice').value,c=$('nCatNew').value.trim()||$('nCat').value;
+  const name=$('nName').value.trim(),price=+$('nPrice').value,c=$('nCatNew').value.trim()||$('nCat').value,ic=$('nIc').value.trim()||'⭐';
   if(!name||!(price>=0)||$('nPrice').value==='')return alert('Enter name and price');
   if(!c)return alert('Enter a category');
   try{
-    const s=await api('/api/services',{method:'POST',body:{name,price,cat:c}});
-    custom.push(s);closeM('mSvc');renderSvc();
+    const s=await api('/api/services',{method:'POST',body:{name,price,cat:c,ic}});
+    services.push(s);
+    localStorage.setItem('cached_services', JSON.stringify(services));
+    closeM('mSvc');
+    renderSvc();
+    showPrompt('✓ Service added and synced with Google Sheet!', 'success');
   }catch(e){alert(e.message)}
 }
 async function delSvc(id){
-  if(!confirm('Remove this service?'))return;
-  try{await api('/api/services/'+id,{method:'DELETE'});custom=custom.filter(s=>s.id!==id);renderSvc()}
-  catch(e){alert(e.message)}
+  if(!confirm('Remove this service from all devices?'))return;
+  try{
+    await api('/api/services/'+id,{method:'DELETE'});
+    services=services.filter(s=>String(s.id)!==String(id));
+    localStorage.setItem('cached_services', JSON.stringify(services));
+    renderSvc();
+  }catch(e){alert(e.message)}
 }
 
 // ---- sales log ----
@@ -886,6 +911,11 @@ async function submitAuth(){
 }
 function start(d){
   user=d.user;uname=d.name;role=d.role||'member';custom=d.custom||[];sales=norm(d.sales);allSales=norm(d.sales);cart={};cat='All';
+  if(d.services && Array.isArray(d.services) && d.services.length){
+    services = d.services;
+    localStorage.setItem('cached_services', JSON.stringify(services));
+  }
+  fetchServices();
   sheetConfirmedIds = loadCachedConfirmedIds();
   sheetIdsFetched = sheetConfirmedIds.size > 0;
   showOnlyNotUploaded = false;
@@ -916,6 +946,7 @@ async function logout(){
   $('app').classList.add('hide');$('auth').classList.remove('hide');authMode('in');
 }
 (async function(){
+  fetchServices();
   if(token){
     try{start(await api('/api/bootstrap'));return}
     catch{token='';localStorage.removeItem('token')}
