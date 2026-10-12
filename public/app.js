@@ -400,12 +400,23 @@ async function saveSale(){
 function openSvc(){
   $('nName').value='';$('nPrice').value='';$('nCatNew').value='';$('nIc').value='⭐';
   $('nCat').innerHTML=cats().filter(c=>c!=='All').map(c=>`<option>${esc(c)}</option>`).join('');
+  // Reset button state in case previous attempt left it loading
+  const btn=$('btnSaveSvc'), cancelBtn=$('btnCancelSvc');
+  if(btn){btn.disabled=false;btn.classList.remove('btn-loading');btn.innerHTML='Add service';}
+  if(cancelBtn) cancelBtn.disabled=false;
   $('mSvc').classList.add('show');
 }
 async function saveSvc(){
   const name=$('nName').value.trim(),price=+$('nPrice').value,c=$('nCatNew').value.trim()||$('nCat').value,ic=$('nIc').value.trim()||'⭐';
   if(!name||!(price>=0)||$('nPrice').value==='')return alert('Enter name and price');
   if(!c)return alert('Enter a category');
+  const btn=$('btnSaveSvc'), cancelBtn=$('btnCancelSvc');
+  const orig=btn.innerHTML;
+  // Show loading state — disable both buttons to prevent double-tap
+  btn.disabled=true;
+  btn.classList.add('btn-loading');
+  btn.innerHTML='<span class="btn-spinner"></span>Adding…';
+  if(cancelBtn) cancelBtn.disabled=true;
   try{
     const s=await api('/api/services',{method:'POST',body:{name,price,cat:c,ic}});
     services.push(s);
@@ -413,7 +424,14 @@ async function saveSvc(){
     closeM('mSvc');
     renderSvc();
     showPrompt('✓ Service added and synced with Google Sheet!', 'success');
-  }catch(e){alert(e.message)}
+  }catch(e){
+    // Re-enable on error so user can retry
+    btn.disabled=false;
+    btn.classList.remove('btn-loading');
+    btn.innerHTML=orig;
+    if(cancelBtn) cancelBtn.disabled=false;
+    showPrompt('✕ Error: '+e.message, 'error', 5000);
+  }
 }
 async function delSvc(id){
   if(!confirm('Remove this service from all devices?'))return;

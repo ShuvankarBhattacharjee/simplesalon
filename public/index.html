@@ -158,7 +158,7 @@ if ('serviceWorker' in navigator) {
     <div class="f"><label>Or new category</label><input id="nCatNew" placeholder="Optional"></div>
     <div class="f"><label>Emoji / Icon</label><input id="nIc" placeholder="e.g. 💆, ✂️, 💈" value="⭐"></div>
   </div>
-  <div class="acts"><button class="btn ghost" onclick="closeM('mSvc')">Cancel</button><button class="btn" onclick="saveSvc()">Add</button></div>
+  <div class="acts"><button class="btn ghost" id="btnCancelSvc" onclick="closeM('mSvc')">Cancel</button><button class="btn" id="btnSaveSvc" onclick="saveSvc()">Add service</button></div>
 </div></div>
 
 <!-- FLOATING PROMPT TOAST -->
