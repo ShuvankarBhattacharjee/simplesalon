@@ -87,3 +87,8 @@ input:focus,select:focus,textarea:focus{outline:2px solid var(--pop);outline-off
 .syncbar .sb-err{color:#c0392b;max-width:340px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .syncbar .btn{padding:7px 14px;font-size:13px;margin-left:auto}
 .syncbar .btn+.btn{margin-left:0}
+.net-status{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:9px 14px;border-radius:12px;font-size:13px;font-weight:500;margin-bottom:18px;transition:all .25s ease}
+.net-status.offline{background:#fdf1e0;color:#925d18;border:1px solid #f6deb8}
+.net-status.syncing{background:#e8f0fe;color:#1a73e8;border:1px solid #c2d7fa}
+.net-status.synced{background:#e6f4ea;color:#137333;border:1px solid #ceead6}
+.net-status .sync-btn{background:#fff;border:1px solid currentColor;color:inherit;padding:3px 10px;border-radius:8px;font-size:12px;font-weight:600;cursor:pointer}

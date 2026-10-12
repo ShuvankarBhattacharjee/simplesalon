@@ -10,8 +10,9 @@
 <div class="auth" id="auth">
   <div class="acard">
     <h1>Salon <span class="pop-color">Sales Book</span></h1>
-    <p class="sub" id="aSub">Log in to see your sales</p>
-    <div class="tabs"><button id="aIn" class="on" onclick="authMode('in')">Log in</button><button id="aUp" onclick="authMode('up')">Sign up</button></div>
+    <p class="sub" id="aSub">Log in to record sales</p>
+    <div class="tabs"><button id="aIn" class="on" onclick="authMode('in')">Log in</button><button id="aUp" onclick="authMode('up')">Staff Sign up</button></div>
+    <div class="notice hide" id="aUpNotice" style="font-size:12px;color:var(--mute);margin:0 0 12px;background:#f5f3ef;padding:8px 10px;border-radius:6px;border:1px solid #e5e0d8">Staff accounts only. Admin accounts are managed directly in the Google Sheet.</div>
     <div class="f"><label>Username</label><input id="aUser" autocomplete="username" placeholder="e.g. rahul"></div>
     <div class="f"><label>Password</label><input id="aPass" type="password" autocomplete="current-password" onkeydown="if(event.key==='Enter')submitAuth()"></div>
     <div class="err" id="aErr"></div>
@@ -24,6 +25,7 @@
     <div class="usr">👤 <span>Hi, <b id="uName"></b></span><span class="tag hide" id="uRole"></span><button class="lnk" onclick="logout()">Log out</button></div>
     <div class="tabs"><button id="t1" class="on" onclick="tab(1)">Services</button><button id="t2" onclick="tab(2)">Sales</button><button id="t3" class="hide" onclick="tab(3)">Dashboard<span class="tb hide" id="tBadge">0</span></button></div>
   </header>
+  <div class="net-status hide" id="netStatus"></div>
 
   <div class="stats">
     <div class="stat"><small>Today</small><b id="sToday">₹0</b></div>
@@ -83,7 +85,10 @@
     <h3 style="font-size:15px;font-weight:600;margin:22px 4px 10px">Team performance</h3>
     <div class="list" id="mList"></div>
 
-    <h3 style="font-size:15px;font-weight:600;margin:22px 4px 10px">Team access</h3>
+    <div style="display:flex;justify-content:space-between;align-items:center;margin:22px 4px 10px">
+      <h3 style="font-size:15px;font-weight:600;margin:0">Team access</h3>
+      <button class="btn ghost" style="font-size:12px;padding:4px 10px" onclick="syncTeamFromSheet()">Sync from Sheet</button>
+    </div>
     <div class="list" id="teamList"></div>
   </section>
 </div>

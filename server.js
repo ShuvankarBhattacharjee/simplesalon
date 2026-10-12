@@ -59,48 +59,38 @@ app.get('/api/status', (req, res) => {
   res.json({ hasUsers: Object.keys(db.getUsers()).length > 0 });
 });
 
-app.post('/api/auth/signup', (req, res) => {
+app.post('/api/auth/signup', async (req, res) => {
   const v = validateCredentials(req.body);
   if (v.error) return res.status(400).json({ error: v.error });
-  const result = auth.createUser(v.key, v.username, req.body.password);
+  const result = await auth.createUser(v.key, v.username, req.body.password);
   if (result.error) return res.status(409).json({ error: result.error });
-  if (result.pending) {
-    gsheet.push({
-      type: 'user_created',
-      data: { user: v.key, name: v.username, role: 'member', status: 'Pending', password: req.body.password }
-    });
-    return res.json({ pending: true });
-  }
-  gsheet.push({
-    type: 'user_created',
-    data: { user: v.key, name: v.username, role: 'admin', status: 'Active', password: req.body.password }
-  });
   res.json({
-    token: auth.createSession(v.key),
-    user: v.key,
-    name: result.user.name,
-    role: auth.roleOf(v.key),
-    custom: db.getCustom(v.key),
-    sales: db.getSales(v.key)
+    pending: true,
+    message: 'Staff account created. Please wait for owner approval.'
   });
 });
 
-app.post('/api/auth/login', (req, res) => {
+app.post('/api/auth/login', async (req, res) => {
   const v = validateCredentials(req.body);
   if (v.error) return res.status(400).json({ error: v.error });
-  const result = auth.authenticate(v.key, req.body.password);
-  if (result.error) return res.status(401).json({ error: result.error });
-  if (result.pending)
+  const result = await auth.authenticate(v.key, req.body.password);
+  if (result.error && !result.pending) {
+    const statusCode = result.code === 'inactive' ? 403 : 401;
+    return res.status(statusCode).json({ error: result.error, code: result.code });
+  }
+  if (result.pending) {
     return res.status(403).json({
-      error: 'Your account is waiting for owner approval',
+      error: result.error || 'Your account is waiting for owner approval',
       code: 'pending'
     });
+  }
   const user = result.user;
   res.json({
     token: auth.createSession(v.key),
     user: v.key,
     name: user.name,
     role: auth.roleOf(v.key),
+    status: user.status,
     custom: db.getCustom(v.key),
     sales: db.getSales(v.key)
   });
@@ -109,6 +99,16 @@ app.post('/api/auth/login', (req, res) => {
 app.post('/api/auth/logout', requireAuth, (req, res) => {
   auth.destroySession(req.token);
   res.json({ ok: true });
+});
+
+// Manual admin setup (for Vercel serverless)
+app.post('/api/admin/setup', async (req, res) => {
+  try {
+    await auth.ensureAdmin();
+    res.json({ ok: true, message: 'Admin ensured' });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
 });
 
 app.get('/api/bootstrap', requireAuth, (req, res) => {
@@ -224,34 +224,27 @@ app.get('/api/admin/users', requireAuth, requireAdmin, (req, res) => {
   res.json({ users: auth.listUsers() });
 });
 
+app.post('/api/admin/sync/team', requireAuth, requireAdmin, async (req, res) => {
+  try {
+    const ok = await auth.syncFromSheet();
+    res.json({ ok, users: auth.listUsers() });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.post('/api/admin/users/:user/approve', requireAuth, requireAdmin, (req, res) => {
   const result = auth.approveUser(req.params.user);
   if (result.error) return res.status(400).json({ error: result.error });
-  const u = db.getUsers()[req.params.user];
-  gsheet.push({
-    type: 'user_approved',
-    data: {
-      user: req.params.user,
-      name: u ? u.name : req.params.user,
-      role: u && u.role === 'admin' ? 'admin' : 'member',
-      status: 'Active',
-      password: u ? u.plainPassword || '' : ''
-    }
-  });
   res.json({ ok: true });
 });
 
 app.delete('/api/admin/users/:user', requireAuth, requireAdmin, (req, res) => {
   if (req.params.user === req.user.username)
     return res.status(400).json({ error: 'Cannot remove your own account' });
-  const existing = db.getUsers()[req.params.user];
   const result = auth.removeUser(req.params.user);
   if (result.error) return res.status(400).json({ error: result.error });
   db.removeData(req.params.user);
-  gsheet.push({
-    type: 'user_removed',
-    data: { user: req.params.user, name: existing ? existing.name : req.params.user }
-  });
   res.json({ ok: true });
 });
 
@@ -358,8 +351,9 @@ app.post('/api/sales', requireAuth, (req, res) => {
   if (!DATE_RE.test(date))
     return res.status(400).json({ error: 'Invalid date' });
 
+  const saleId = b.id ? Number(b.id) : Date.now();
   const sale = {
-    id: Date.now(),
+    id: saleId,
     items: b.items.map(i => ({
       name: String(i.name || ''),
       cat: String(i.cat || ''),
@@ -373,6 +367,10 @@ app.post('/api/sales', requireAuth, (req, res) => {
     note: String(b.note || '').trim()
   };
   const sales = db.getSales(req.user.username);
+  const existing = sales.find(s => s.id === saleId);
+  if (existing) {
+    return res.status(200).json(existing);
+  }
   sales.unshift(sale);
   db.saveSales(req.user.username, sales);
   gsheet.push({
@@ -391,6 +389,71 @@ app.post('/api/sales', requireAuth, (req, res) => {
     }
   });
   res.status(201).json(sale);
+});
+
+// Auto-sync multiple offline sales from mobile
+app.post('/api/sales/sync', requireAuth, async (req, res) => {
+  const incoming = Array.isArray(req.body.sales) ? req.body.sales : [];
+  if (!incoming.length) return res.json({ ok: true, synced: 0 });
+
+  const sales = db.getSales(req.user.username);
+  let synced = 0;
+
+  for (const b of incoming) {
+    const total = Number(b.total);
+    const calc = Number(b.calc);
+    if (!Array.isArray(b.items) || !b.items.length || !Number.isFinite(total) || total < 0) continue;
+    const saleId = b.id ? Number(b.id) : Date.now() + synced;
+    if (sales.some(s => s.id === saleId)) continue;
+
+    const sale = {
+      id: saleId,
+      items: b.items.map(i => ({
+        name: String(i.name || ''),
+        cat: String(i.cat || ''),
+        price: Number(i.price) || 0,
+        qty: Number(i.qty) || 1
+      })),
+      calc: Number.isFinite(calc) ? calc : total,
+      total,
+      pay: PAYMENTS.includes(b.pay) ? b.pay : 'Cash',
+      date: DATE_RE.test(b.date) ? b.date : new Date().toISOString().slice(0, 10),
+      note: String(b.note || '').trim()
+    };
+
+    sales.unshift(sale);
+    synced++;
+
+    await gsheet.push({
+      type: 'sale_created',
+      data: {
+        id: sale.id,
+        date: sale.date,
+        member: req.user.name,
+        services: sale.items
+          .map(i => i.name + (i.qty > 1 ? ' ×' + i.qty : ''))
+          .join(', '),
+        pay: sale.pay,
+        calc: sale.calc,
+        total: sale.total,
+        note: sale.note
+      }
+    });
+  }
+
+  if (synced > 0) {
+    sales.sort((a, b) => String(b.date).localeCompare(String(a.date)) || b.id - a.id);
+    db.saveSales(req.user.username, sales);
+    await gsheet.flush();
+  }
+
+  res.json({ ok: true, synced, sales });
+});
+
+// Any authenticated user can trigger a flush when reconnecting
+app.post('/api/sync/flush', requireAuth, async (req, res) => {
+  await gsheet.flush();
+  res.json(gsheet.status());
 });
 
 app.delete('/api/sales/:id', requireAuth, (req, res) => {

@@ -2,19 +2,125 @@
 let token = localStorage.getItem('token') || '';
 
 async function api(path, opts = {}) {
-  const res = await fetch(path, {
-    method: opts.method || 'GET',
-    headers: {
-      'Content-Type': 'application/json',
-      ...(token ? { Authorization: 'Bearer ' + token } : {})
-    },
-    body: opts.body ? JSON.stringify(opts.body) : undefined
-  });
-  let data = {};
-  try { data = await res.json(); } catch {}
-  if (!res.ok) throw new Error(data.error || 'Request failed');
-  return data;
+  try {
+    const res = await fetch(path, {
+      method: opts.method || 'GET',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: 'Bearer ' + token } : {})
+      },
+      body: opts.body ? JSON.stringify(opts.body) : undefined
+    });
+    let data = {};
+    try { data = await res.json(); } catch {}
+    if (!res.ok) throw new Error(data.error || 'Request failed');
+    return data;
+  } catch (err) {
+    if (!navigator.onLine || err.name === 'TypeError' || String(err.message).includes('fetch')) {
+      err.isNetwork = true;
+    }
+    throw err;
+  }
 }
+
+// ---- mobile auto-sync & offline storage ----
+const OFFLINE_KEY = () => 'offline_sales_' + (user || 'guest');
+function getOfflineQueue() {
+  try { return JSON.parse(localStorage.getItem(OFFLINE_KEY()) || '[]'); } catch { return []; }
+}
+function saveOfflineQueue(q) {
+  try { localStorage.setItem(OFFLINE_KEY(), JSON.stringify(q)); } catch {}
+}
+function queueOfflineSale(s) {
+  const q = getOfflineQueue();
+  if (!q.some(x => x.id === s.id)) {
+    q.push(s);
+    saveOfflineQueue(q);
+  }
+}
+let isSyncing = false;
+let syncSuccessTimer = null;
+
+async function syncPendingSales() {
+  if (isSyncing || !token) return;
+  const q = getOfflineQueue();
+  if (!q.length) {
+    updateNetStatus();
+    return;
+  }
+  if (!navigator.onLine) {
+    updateNetStatus();
+    return;
+  }
+  isSyncing = true;
+  updateNetStatus();
+  try {
+    const res = await api('/api/sales/sync', {
+      method: 'POST',
+      body: { sales: q }
+    });
+    if (res && res.ok) {
+      saveOfflineQueue([]);
+      if (Array.isArray(res.sales)) {
+        sales = norm(res.sales);
+        if (role === 'admin') loadAllSales();
+        renderSales();
+        stats();
+      }
+      showSyncedBanner(res.synced || q.length);
+    }
+  } catch (e) {
+    console.warn('Auto-sync retry failed:', e.message);
+  } finally {
+    isSyncing = false;
+    updateNetStatus();
+  }
+}
+
+function showSyncedBanner(count) {
+  const el = $('netStatus');
+  if (!el) return;
+  clearTimeout(syncSuccessTimer);
+  el.className = 'net-status synced';
+  el.innerHTML = `<span>✓ ${count} sale${count === 1 ? '' : 's'} synced automatically with Google Sheet</span>`;
+  syncSuccessTimer = setTimeout(() => { updateNetStatus(); }, 4000);
+}
+
+function updateNetStatus() {
+  const el = $('netStatus');
+  if (!el || !user) return;
+  const q = getOfflineQueue();
+  if (isSyncing) {
+    el.className = 'net-status syncing';
+    el.innerHTML = '<span>↻ Connecting & syncing with Google Sheet...</span>';
+    return;
+  }
+  if (!navigator.onLine) {
+    el.className = 'net-status offline';
+    el.innerHTML = `<span>⚡ Offline mode — ${q.length ? q.length + ' entry(s) saved on mobile' : 'Ready'}. Auto-syncs once reconnected.</span>`;
+    return;
+  }
+  if (q.length > 0) {
+    el.className = 'net-status offline';
+    el.innerHTML = `<span>⚡ ${q.length} sale${q.length === 1 ? '' : 's'} waiting to sync with Google Sheet</span><button class="sync-btn" onclick="syncPendingSales()">Sync now</button>`;
+    return;
+  }
+  el.className = 'net-status hide';
+  el.innerHTML = '';
+}
+
+window.addEventListener('online', () => {
+  updateNetStatus();
+  syncPendingSales();
+});
+window.addEventListener('offline', () => {
+  updateNetStatus();
+});
+setInterval(() => {
+  if (navigator.onLine && getOfflineQueue().length > 0) {
+    syncPendingSales();
+  }
+}, 8000);
 
 const PRESETS=[
  {id:'p1',name:'Haircut',price:300,cat:'Hair',ic:'✂️'},
@@ -79,14 +185,44 @@ async function saveSale(){
   const total=+$('cTot').value;
   if($('cTot').value===''||total<0)return alert('Enter a valid total');
   const items=Object.entries(cart).map(([id,q])=>{const s=all().find(x=>x.id===id);return{name:s.name,cat:s.cat,price:s.price,qty:q}});
+  const saleObj = {
+    id: Date.now(),
+    items,
+    calc: calcTotal(),
+    total,
+    pay: $('cPay').value,
+    date: $('cDate').value||today(),
+    note: $('cNote').value.trim()
+  };
+
+  if (!navigator.onLine) {
+    queueOfflineSale(saleObj);
+    sales.unshift(saleObj);
+    if(role==='admin') allSales.unshift({...saleObj,by:user,byName:uname});
+    cart={};closeM('mSale');renderSvc();updateCart();stats();
+    updateNetStatus();
+    renderSales();
+    return;
+  }
+
   try{
-    const sale=await api('/api/sales',{method:'POST',body:{
-      items,calc:calcTotal(),total,pay:$('cPay').value,date:$('cDate').value||today(),note:$('cNote').value.trim()
-    }});
+    const sale=await api('/api/sales',{method:'POST',body:saleObj});
     sales.unshift(sale);
     if(role==='admin')allSales.unshift({...sale,by:user,byName:uname});
     cart={};closeM('mSale');renderSvc();updateCart();stats();
-  }catch(e){alert(e.message)}
+    syncPendingSales();
+  }catch(e){
+    if (e.isNetwork || !navigator.onLine) {
+      queueOfflineSale(saleObj);
+      sales.unshift(saleObj);
+      if(role==='admin') allSales.unshift({...saleObj,by:user,byName:uname});
+      cart={};closeM('mSale');renderSvc();updateCart();stats();
+      updateNetStatus();
+      renderSales();
+    } else {
+      alert(e.message);
+    }
+  }
 }
 // ---- custom services ----
 function openSvc(){
@@ -125,9 +261,10 @@ function filtered(){
 const names=s=>s.items.map(i=>i.name+(i.qty>1?' ×'+i.qty:'')).join(', ');
 function renderSales(){
   const l=filtered();
+  const qIds = new Set(getOfflineQueue().map(x => x.id));
   $('list').innerHTML=l.length?l.map(s=>`
     <div class="item"><div><b>${esc(names(s))}</b>
-    <small>${s.date} · ${s.pay}${role==='admin'&&s.byName?' · '+esc(s.byName):''}${s.note?' · '+esc(s.note):''}${s.total!==s.calc?' · adjusted from '+inr(s.calc):''}</small></div>
+    <small>${s.date} · ${s.pay}${role==='admin'&&s.byName?' · '+esc(s.byName):''}${s.note?' · '+esc(s.note):''}${s.total!==s.calc?' · adjusted from '+inr(s.calc):''}${qIds.has(s.id)?' · <span style="color:#a5731f;font-weight:600">⚡ Queued for sheet</span>':''}</small></div>
     <div class="amt">${inr(s.total)}</div><button class="del" onclick="delSale(${s.id})" title="Delete">✕</button></div>`).join('')
     :'<div class="empty">No sales found</div>';
   $('ft').textContent=inr(l.reduce((a,s)=>a+s.total,0));
@@ -239,14 +376,32 @@ async function syncBackfill(){
 }
 
 function renderTeam(list){
-  $('teamList').innerHTML=list.length?list.map(u=>`
+  $('teamList').innerHTML=list.length?list.map(u=>{
+    const isAdm = u.role === 'admin';
+    const isPend = u.status === 'pending';
+    const isAct = u.status === 'active';
+    const statusBadge = isPend
+      ? '<span class="pill warn">Pending approval</span>'
+      : (isAct ? '<span class="pill okp">Active</span>' : '<span class="pill sb-err">Inactive</span>');
+    const roleBadge = `<span class="pill ${isAdm ? 'okp' : ''}">${isAdm ? 'Admin / Owner' : 'Staff / Worker'}</span>`;
+    return `
     <div class="item"><div><b>${esc(u.name)}</b><small>@${esc(u.user)} · joined ${u.created?u.created.slice(0,10):'—'}</small></div>
-    <div>${u.status==='pending'?'<span class="pill warn">Pending approval</span>':`<span class="pill ${u.role==='admin'?'okp':''}">${u.role==='admin'?'Owner':'Worker'}</span>`}</div>
+    <div style="display:flex;gap:6px;align-items:center">${roleBadge} ${statusBadge}</div>
     <div class="acts2">
-      ${u.status==='pending'?`<button class="btn" onclick="approveUser('${u.user}')">Approve</button>`:''}
-      ${u.user!==user?`<button class="btn ghost" onclick="removeUser('${u.user}')">Remove</button>`:''}
-    </div></div>`).join('')
-    :'<div class="empty">No team members yet</div>';
+      ${isPend?`<button class="btn" onclick="approveUser('${esc(u.user)}')">Approve</button>`:''}
+      ${u.user!==user && !isAdm?`<button class="btn ghost" onclick="removeUser('${esc(u.user)}')">Remove</button>`:''}
+    </div></div>`;
+  }).join('')
+  :'<div class="empty">No team members yet</div>';
+}
+async function syncTeamFromSheet(){
+  try{
+    const r=await api('/api/admin/sync/team',{method:'POST'});
+    teamUsers=r.users;
+    renderTeam(teamUsers);
+    await refreshTeamUsers();
+    alert('Team accounts synced from Google Sheet!');
+  }catch(e){alert(e.message)}
 }
 async function approveUser(u){
   try{await api('/api/admin/users/'+u+'/approve',{method:'POST'});await loadDash()}
@@ -319,10 +474,18 @@ function renderDash(d){
 }
 
 // ---- auth ----
+// ---- auth ----
 let mode='in';
-function authMode(m){mode=m;$('aIn').classList.toggle('on',m==='in');$('aUp').classList.toggle('on',m==='up');
-  $('aBtn').textContent=m==='in'?'Log in':'Create account';$('aSub').textContent=m==='in'?'Log in to see your sales':'Create an account to start';
-  $('aErr').textContent='';$('aErr').className='err'}
+function authMode(m){
+  mode=m;
+  $('aIn').classList.toggle('on',m==='in');
+  $('aUp').classList.toggle('on',m==='up');
+  $('aBtn').textContent=m==='in'?'Log in':'Register Staff Account';
+  $('aSub').textContent=m==='in'?'Log in to record sales':'Staff registration';
+  if($('aUpNotice')) $('aUpNotice').classList.toggle('hide', m==='in');
+  $('aErr').textContent='';
+  $('aErr').className='err';
+}
 async function submitAuth(){
   const n=$('aUser').value.trim(),pw=$('aPass').value;
   const e=(t,ok)=>{$('aErr').textContent=t;$('aErr').className=ok?'err ok':'err'};
@@ -332,7 +495,7 @@ async function submitAuth(){
     const r=await api('/api/auth/'+(mode==='up'?'signup':'login'),{method:'POST',body:{username:n,password:pw}});
     if(r.pending){
       authMode('in');
-      e('Account created — the owner must approve it before you can log in.',true);
+      e('Staff account created — the owner must approve it before you can log in.',true);
       $('aUser').value=n;$('aPass').value='';
       return;
     }
@@ -351,6 +514,8 @@ function start(d){
   $('auth').classList.add('hide');$('app').classList.remove('hide');$('uName').textContent=d.name;
   $('aUser').value='';$('aPass').value='';$('aErr').textContent='';$('aErr').className='err';
   tab(1);renderSvc();stats();updateCart();
+  updateNetStatus();
+  syncPendingSales();
   if(role==='admin')refreshTeamUsers();
 }
 async function logout(){
@@ -366,6 +531,5 @@ async function logout(){
     try{start(await api('/api/bootstrap'));return}
     catch{token='';localStorage.removeItem('token')}
   }
-  try{authMode((await api('/api/status')).hasUsers?'in':'up')}
-  catch{authMode('in')}
+  authMode('in');
 })();
