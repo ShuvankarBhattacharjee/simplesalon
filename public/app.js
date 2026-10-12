@@ -23,7 +23,7 @@ async function api(path, opts = {}) {
   }
 }
 
-// ---- mobile auto-sync & offline storage ----
+// ---- offline queue (keyed per user) ----
 const OFFLINE_KEY = () => 'offline_sales_' + (user || 'guest');
 function getOfflineQueue() {
   try { return JSON.parse(localStorage.getItem(OFFLINE_KEY()) || '[]'); } catch { return []; }
@@ -33,32 +33,126 @@ function saveOfflineQueue(q) {
 }
 function queueOfflineSale(s) {
   const q = getOfflineQueue();
-  if (!q.some(x => x.id === s.id)) {
-    q.push(s);
-    saveOfflineQueue(q);
+  if (!q.some(x => x.id === s.id)) { q.push(s); saveOfflineQueue(q); }
+}
+function removeFromOfflineQueue(id) {
+  saveOfflineQueue(getOfflineQueue().filter(x => x.id !== id));
+}
+
+// ---- sheet-confirmed IDs ----
+const CONFIRMED_CACHE_KEY = () => 'sheet_confirmed_ids_' + (user || 'guest');
+function loadCachedConfirmedIds() {
+  try {
+    const raw = JSON.parse(localStorage.getItem(CONFIRMED_CACHE_KEY()) || '[]');
+    return new Set(raw.map(String));
+  } catch { return new Set(); }
+}
+function saveCachedConfirmedIds(set) {
+  try {
+    localStorage.setItem(CONFIRMED_CACHE_KEY(), JSON.stringify(Array.from(set)));
+  } catch {}
+}
+
+let sheetConfirmedIds = loadCachedConfirmedIds();
+let sheetIdsFetched = sheetConfirmedIds.size > 0;
+
+async function fetchSheetIds() {
+  if (!navigator.onLine || !token) return;
+  try {
+    const r = await api('/api/sales/sheet');
+    if (r && Array.isArray(r.ids)) {
+      if (r.fromSheet) {
+        // Sheet was actually reached — REPLACE (not merge) confirmed IDs
+        // This means rows deleted from the sheet will flip back to "Not Uploaded"
+        sheetConfirmedIds = new Set(r.ids.map(String));
+      } else {
+        // Sheet unreachable — only add from local cache fallback, never remove
+        for (const id of r.ids) sheetConfirmedIds.add(String(id));
+      }
+      sheetIdsFetched = true;
+      saveCachedConfirmedIds(sheetConfirmedIds);
+      renderSales();
+      updateNetStatus();
+    }
+  } catch {}
+}
+
+function isUploaded(saleId) {
+  return sheetConfirmedIds.has(String(saleId));
+}
+
+function isInQueue(saleId) {
+  return getOfflineQueue().some(x => x.id === saleId);
+}
+
+// Calculate total non-uploaded / non-synced items across offline queue & server sales
+function countTotalPending() {
+  const q = getOfflineQueue();
+  const notUploadedSales = typeof activeSales === 'function' ? activeSales().filter(s => {
+    const st = getUploadStatus(s.id);
+    return st === 'not-uploaded' || st === 'unknown';
+  }) : [];
+  const idSet = new Set(notUploadedSales.map(s => String(s.id)));
+  for (const s of q) idSet.add(String(s.id));
+  return idSet.size;
+}
+
+// Update all sync button states and badges
+function updateSyncBadges() {
+  const pending = countTotalPending();
+
+  // Header sync button & badge
+  const headerBtn = $('btnHeaderSync');
+  if (headerBtn) {
+    if (isSyncing) {
+      headerBtn.disabled = true;
+      headerBtn.innerHTML = '<span class="h-sync-icon spinning">↻</span> <span class="h-sync-text">Syncing…</span>';
+    } else {
+      headerBtn.disabled = false;
+      headerBtn.innerHTML = `<span class="h-sync-icon">☁️</span> <span class="h-sync-text">Sync Data</span> <span class="h-sync-badge ${pending > 0 ? '' : 'hide'}" id="hSyncBadge">${pending}</span>`;
+      if (pending > 0) {
+        headerBtn.classList.add('has-pending');
+        headerBtn.title = `Upload ${pending} non-synced entry(s) to Google Sheet`;
+      } else {
+        headerBtn.classList.remove('has-pending');
+        headerBtn.title = 'All data synced. Click to check and upload manually.';
+      }
+    }
+  }
+
+  // Sales tab button
+  const upAllBtn = $('btnUploadAll');
+  if (upAllBtn) {
+    if (isSyncing) {
+      upAllBtn.disabled = true;
+      upAllBtn.className = 'btn upload-all-btn';
+      upAllBtn.innerHTML = '<span class="up-ic spinning">↻</span> Uploading all…';
+    } else if (pending > 0) {
+      upAllBtn.disabled = false;
+      upAllBtn.className = 'btn upload-all-btn has-pending';
+      upAllBtn.innerHTML = `<span class="up-ic">↑</span> Upload all non-synced <span class="up-badge" id="salesUpBadge">${pending}</span>`;
+      upAllBtn.title = `Upload ${pending} non-synced entry(s) to Google Sheet`;
+    } else {
+      upAllBtn.disabled = false;
+      upAllBtn.className = 'btn ghost upload-all-btn all-synced';
+      upAllBtn.innerHTML = '<span class="up-ic">✓</span> All synced (Upload all)';
+      upAllBtn.title = 'All sales are confirmed in Google Sheet. Click to re-check and sync.';
+    }
   }
 }
+
+// ---- auto-sync ----
 let isSyncing = false;
-let syncSuccessTimer = null;
 
 async function syncPendingSales() {
   if (isSyncing || !token) return;
   const q = getOfflineQueue();
-  if (!q.length) {
-    updateNetStatus();
-    return;
-  }
-  if (!navigator.onLine) {
-    updateNetStatus();
-    return;
-  }
+  if (!q.length) { updateNetStatus(); return; }
+  if (!navigator.onLine) { updateNetStatus(); return; }
   isSyncing = true;
   updateNetStatus();
   try {
-    const res = await api('/api/sales/sync', {
-      method: 'POST',
-      body: { sales: q }
-    });
+    const res = await api('/api/sales/sync', { method: 'POST', body: { sales: q } });
     if (res && res.ok) {
       saveOfflineQueue([]);
       if (Array.isArray(res.sales)) {
@@ -67,61 +161,87 @@ async function syncPendingSales() {
         renderSales();
         stats();
       }
-      showSyncedBanner(res.synced || q.length);
+      showBanner(`✓ ${res.synced || q.length} sale${(res.synced || q.length) === 1 ? '' : 's'} synced with Google Sheet`, 'synced');
+      fetchSheetIds();
     }
   } catch (e) {
-    console.warn('Auto-sync retry failed:', e.message);
+    console.warn('Auto-sync failed:', e.message);
   } finally {
     isSyncing = false;
     updateNetStatus();
   }
 }
 
-function showSyncedBanner(count) {
+// ---- banners ----
+let bannerTimer = null;
+function showBanner(msg, type) {
   const el = $('netStatus');
   if (!el) return;
-  clearTimeout(syncSuccessTimer);
-  el.className = 'net-status synced';
-  el.innerHTML = `<span>✓ ${count} sale${count === 1 ? '' : 's'} synced automatically with Google Sheet</span>`;
-  syncSuccessTimer = setTimeout(() => { updateNetStatus(); }, 4000);
+  clearTimeout(bannerTimer);
+  el.className = 'net-status banner-' + (type || 'synced');
+  el.innerHTML = '<span>' + msg + '</span>';
+  el.classList.remove('hide');
+  bannerTimer = setTimeout(() => { updateNetStatus(); }, 4200);
+}
+
+// ---- floating prompt toast ----
+let promptTimer = null;
+function showPrompt(msg, type, duration) {
+  const el = $('toastPrompt');
+  if (!el) return;
+  clearTimeout(promptTimer);
+  const icons = { success: '✓', offline: '⚡', error: '✕', upload: '☁️' };
+  const cls = type === 'offline' ? 'toast-offline' : type === 'error' ? 'toast-error' : 'toast-success';
+  const icon = icons[type] || '✓';
+  el.innerHTML = '<span class="toast-icon">' + icon + '</span><span>' + msg + '</span>';
+  el.className = 'toast-prompt ' + cls;
+  promptTimer = setTimeout(hidePrompt, duration || 3500);
+}
+function hidePrompt() {
+  clearTimeout(promptTimer);
+  const el = $('toastPrompt');
+  if (el) el.className = 'toast-prompt hide';
 }
 
 function updateNetStatus() {
   const el = $('netStatus');
   if (!el || !user) return;
   const q = getOfflineQueue();
+  const pending = countTotalPending();
+  updateSyncBadges();
+
   if (isSyncing) {
-    el.className = 'net-status syncing';
-    el.innerHTML = '<span>↻ Connecting & syncing with Google Sheet...</span>';
+    el.className = 'net-status banner-syncing';
+    el.innerHTML = '<span><i class="spinning" style="display:inline-block;margin-right:6px">↻</i> Syncing with Google Sheet…</span>';
+    el.classList.remove('hide');
     return;
   }
   if (!navigator.onLine) {
-    el.className = 'net-status offline';
-    el.innerHTML = `<span>⚡ Offline mode — ${q.length ? q.length + ' entry(s) saved on mobile' : 'Ready'}. Auto-syncs once reconnected.</span>`;
+    el.className = 'net-status banner-offline';
+    el.innerHTML = '<span>⚡ Offline — ' + (q.length ? q.length + ' entry(s) pending upload' : 'ready') + '. Auto-syncs on reconnect.</span>';
+    el.classList.remove('hide');
     return;
   }
-  if (q.length > 0) {
-    el.className = 'net-status offline';
-    el.innerHTML = `<span>⚡ ${q.length} sale${q.length === 1 ? '' : 's'} waiting to sync with Google Sheet</span><button class="sync-btn" onclick="syncPendingSales()">Sync now</button>`;
+  if (pending > 0) {
+    el.className = 'net-status banner-offline';
+    el.innerHTML = '<span>⚡ ' + pending + ' sale' + (pending === 1 ? '' : 's') + ' not uploaded to Google Sheet</span><button class="sync-btn" onclick="uploadAll()">Upload now</button>';
+    el.classList.remove('hide');
     return;
   }
   el.className = 'net-status hide';
   el.innerHTML = '';
 }
 
-window.addEventListener('online', () => {
-  updateNetStatus();
-  syncPendingSales();
-});
-window.addEventListener('offline', () => {
-  updateNetStatus();
-});
+window.addEventListener('online', () => { updateNetStatus(); syncPendingSales(); });
+window.addEventListener('offline', () => { updateNetStatus(); });
 setInterval(() => {
-  if (navigator.onLine && getOfflineQueue().length > 0) {
-    syncPendingSales();
-  }
+  if (navigator.onLine && getOfflineQueue().length > 0) syncPendingSales();
 }, 8000);
+setInterval(() => {
+  if (navigator.onLine && user) fetchSheetIds();
+}, 60000);
 
+// ---- services data ----
 const PRESETS=[
  {id:'p1',name:'Haircut',price:300,cat:'Hair',ic:'✂️'},
  {id:'p2',name:'Hair Wash & Style',price:200,cat:'Hair',ic:'💇'},
@@ -157,7 +277,7 @@ function renderSvc(){
     <div class="svc ${s.custom?'custom':''} ${cart[s.id]?'sel':''}" onclick="addCart('${s.id}')">
       ${cart[s.id]?`<span class="badge">${cart[s.id]}</span>`:''}${s.custom?`<span class="x" onclick="event.stopPropagation();delSvc('${s.id}')">✕</span>`:''}
       <div class="ic">${s.ic||'⭐'}</div><h3>${esc(s.name)}</h3><p>${esc(s.cat)}</p><div class="pr">${inr(s.price)}</div>
-    </div>`).join('')+`<div class="svc add" onclick="openSvc()"><div style="font-size:26px">＋</div><p>Add service</p></div>`;
+    </div>`).join('')+`<div class="svc add" onclick="openSvc()"><div style="font-size:22px;line-height:1">＋</div><p>Add</p></div>`;
 }
 function setCat(c){cat=c;renderSvc()}
 
@@ -181,6 +301,7 @@ function ckRender(){
   if(!edited)$('cTot').value=calcTotal();
 }
 function qty(id,d){cart[id]+=d;if(cart[id]<=0)delete cart[id];renderSvc();updateCart();ckRender()}
+
 async function saveSale(){
   const total=+$('cTot').value;
   if($('cTot').value===''||total<0)return alert('Enter a valid total');
@@ -195,35 +316,43 @@ async function saveSale(){
     note: $('cNote').value.trim()
   };
 
+  cart={};closeM('mSale');renderSvc();updateCart();
+
   if (!navigator.onLine) {
     queueOfflineSale(saleObj);
     sales.unshift(saleObj);
     if(role==='admin') allSales.unshift({...saleObj,by:user,byName:uname});
-    cart={};closeM('mSale');renderSvc();updateCart();stats();
-    updateNetStatus();
-    renderSales();
+    stats(); updateNetStatus(); renderSales();
+    showPrompt('💾 Saved to your device — will upload when online', 'offline');
     return;
   }
 
   try{
     const sale=await api('/api/sales',{method:'POST',body:saleObj});
+    sheetConfirmedIds.add(String(sale.id));
+    sheetIdsFetched = true;
+    saveCachedConfirmedIds(sheetConfirmedIds);
     sales.unshift(sale);
     if(role==='admin')allSales.unshift({...sale,by:user,byName:uname});
-    cart={};closeM('mSale');renderSvc();updateCart();stats();
+    stats();
+    renderSales();
+    updateNetStatus();
+    showPrompt('✓ Data saved & uploaded to Google Sheet!', 'success');
     syncPendingSales();
+    setTimeout(fetchSheetIds, 1500);
   }catch(e){
     if (e.isNetwork || !navigator.onLine) {
       queueOfflineSale(saleObj);
       sales.unshift(saleObj);
       if(role==='admin') allSales.unshift({...saleObj,by:user,byName:uname});
-      cart={};closeM('mSale');renderSvc();updateCart();stats();
-      updateNetStatus();
-      renderSales();
+      stats(); updateNetStatus(); renderSales();
+      showPrompt('💾 Saved to your device — will upload when online', 'offline');
     } else {
-      alert(e.message);
+      showPrompt('✕ Error: ' + e.message, 'error', 5000);
     }
   }
 }
+
 // ---- custom services ----
 function openSvc(){
   $('nName').value='';$('nPrice').value='';$('nCatNew').value='';
@@ -246,6 +375,8 @@ async function delSvc(id){
 }
 
 // ---- sales log ----
+let showOnlyNotUploaded = false;
+
 function activeSales(){
   if(role!=='admin')return sales;
   const v=$('sm').value;
@@ -256,19 +387,176 @@ async function loadAllSales(){
 }
 function filtered(){
   const q=$('sq').value.toLowerCase(),d=$('sd').value,p=$('sp').value;
-  return activeSales().filter(s=>(!q||(names(s)+s.note).toLowerCase().includes(q))&&(!d||s.date===d)&&(!p||s.pay===p));
+  let list = activeSales().filter(s=>(!q||(names(s)+s.note).toLowerCase().includes(q))&&(!d||s.date===d)&&(!p||s.pay===p));
+  if (showOnlyNotUploaded) {
+    // Include: items in offline queue, items not confirmed in sheet, AND unknowns (not yet checked)
+    list = list.filter(s => {
+      const st = getUploadStatus(s.id);
+      return st === 'not-uploaded' || st === 'unknown';
+    });
+  }
+  return list;
 }
-const names=s=>s.items.map(i=>i.name+(i.qty>1?' ×'+i.qty:'')).join(', ');
+const names=s=>s.items.map(i=>i.name+(i.qty>1?' x'+i.qty:'')).join(', ');
+
+function getUploadStatus(saleId) {
+  if (isInQueue(saleId)) return 'not-uploaded';
+  if (sheetIdsFetched) return sheetConfirmedIds.has(String(saleId)) ? 'uploaded' : 'not-uploaded';
+  return 'unknown'; // sheet IDs not yet fetched
+}
+
+// Count how many entries are not uploaded or unknown
+function countPending() {
+  return activeSales().filter(s => {
+    const st = getUploadStatus(s.id);
+    return st === 'not-uploaded' || st === 'unknown';
+  }).length;
+}
+
 function renderSales(){
-  const l=filtered();
-  const qIds = new Set(getOfflineQueue().map(x => x.id));
-  $('list').innerHTML=l.length?l.map(s=>`
-    <div class="item"><div><b>${esc(names(s))}</b>
-    <small>${s.date} · ${s.pay}${role==='admin'&&s.byName?' · '+esc(s.byName):''}${s.note?' · '+esc(s.note):''}${s.total!==s.calc?' · adjusted from '+inr(s.calc):''}${qIds.has(s.id)?' · <span style="color:#a5731f;font-weight:600">⚡ Queued for sheet</span>':''}</small></div>
-    <div class="amt">${inr(s.total)}</div><button class="del" onclick="delSale(${s.id})" title="Delete">✕</button></div>`).join('')
-    :'<div class="empty">No sales found</div>';
-  $('ft').textContent=inr(l.reduce((a,s)=>a+s.total,0));
+  const l = filtered();
+  updateSyncBadges();
+
+  $('list').innerHTML = l.length ? l.map(s => {
+    const status = getUploadStatus(s.id);
+    let statusBtn;
+    if (status === 'uploaded') {
+      statusBtn = `<button class="upload-tag uploaded" title="Confirmed in Google Sheet — click to re-check" onclick="refreshSheetStatus()">✓ Uploaded</button>`;
+    } else if (status === 'not-uploaded') {
+      statusBtn = `<button class="upload-tag not-uploaded" title="Not found in Google Sheet — click to upload" onclick="uploadSingle(${s.id})">↑ Not Uploaded</button>`;
+    } else {
+      // unknown = sheet not yet checked. Show upload button so user can act immediately
+      statusBtn = `<button class="upload-tag not-uploaded" title="Upload status unknown — click to upload to Google Sheet" onclick="uploadSingle(${s.id})">↑ Upload to Sheet</button>`;
+    }
+    return `<div class="item" id="sale-${s.id}"><div><b>${esc(names(s))}</b>
+      <small>${s.date} · ${s.pay}${role==='admin'&&s.byName?' · '+esc(s.byName):''}${s.note?' · '+esc(s.note):''}${s.total!==s.calc?' · adjusted from '+inr(s.calc):''}</small>
+      <div class="sale-tags">${statusBtn}</div></div>
+      <div class="amt">${inr(s.total)}</div>
+      <button class="del" onclick="delSale(${s.id})" title="Delete">✕</button></div>`;
+  }).join('') : '<div class="empty">No sales found</div>';
+  $('ft').textContent = inr(l.reduce((a, s) => a + s.total, 0));
 }
+
+async function refreshSheetStatus() {
+  showBanner('↻ Checking Google Sheet for upload status…', 'syncing');
+  await fetchSheetIds();
+}
+
+async function uploadSingle(saleId) {
+  // If in offline queue, do a full queue sync
+  if (getOfflineQueue().some(x => x.id === saleId)) {
+    await syncPendingSales();
+    renderSales();
+    updateNetStatus();
+    return;
+  }
+  // Disable the button immediately
+  const btn = document.querySelector('#sale-' + saleId + ' .upload-tag');
+  if (btn) { btn.disabled = true; btn.innerHTML = '<span style="opacity:.6">↑ Uploading…</span>'; }
+  try {
+    const r = await api('/api/sales/' + saleId + '/upload', { method: 'POST' });
+    if (r.ok) {
+      sheetConfirmedIds.add(String(saleId));
+      showBanner('✓ Entry uploaded to Google Sheet!', 'payment');
+    } else {
+      showBanner('Upload failed — check sheet connection', 'error');
+    }
+  } catch (e) {
+    showBanner('Upload failed: ' + e.message, 'error');
+  }
+  renderSales();
+  updateNetStatus();
+}
+
+// Upload ALL not-uploaded / non-synced entries at once
+async function uploadAll() {
+  if (isSyncing) return;
+  if (!navigator.onLine) {
+    showBanner('⚡ Device is offline — connect to internet to upload', 'error');
+    return;
+  }
+
+  isSyncing = true;
+  updateSyncBadges();
+  showBanner('↻ Uploading all non-synced data to Google Sheet…', 'syncing');
+
+  let uploadedCount = 0;
+  let offlineSyncedCount = 0;
+
+  try {
+    // 1. Sync client offline queue first
+    const q = getOfflineQueue();
+    if (q.length > 0) {
+      try {
+        const res = await api('/api/sales/sync', { method: 'POST', body: { sales: q } });
+        if (res && res.ok) {
+          saveOfflineQueue([]);
+          offlineSyncedCount = res.synced || q.length;
+          if (Array.isArray(res.sales)) {
+            sales = norm(res.sales);
+            if (role === 'admin') await loadAllSales();
+          }
+        }
+      } catch (err) {
+        console.warn('Offline queue sync error:', err);
+      }
+    }
+
+    // 2. Call server bulk upload endpoint
+    try {
+      const bulkRes = await api('/api/sales/upload-all', { method: 'POST' });
+      if (bulkRes && bulkRes.ok) {
+        uploadedCount = (bulkRes.uploaded || 0) + offlineSyncedCount;
+        if (Array.isArray(bulkRes.confirmedIds)) {
+          sheetConfirmedIds = new Set(bulkRes.confirmedIds.map(String));
+          sheetIdsFetched = true;
+        }
+      } else {
+        throw new Error((bulkRes && bulkRes.error) || 'Bulk upload failed');
+      }
+    } catch (bulkErr) {
+      console.warn('Bulk upload fallback to sequential:', bulkErr.message);
+      // Fallback: Individual upload if /api/sales/upload-all had an issue
+      const allS = activeSales();
+      for (const s of allS) {
+        const st = getUploadStatus(s.id);
+        if (st === 'not-uploaded' || st === 'unknown') {
+          if (getOfflineQueue().some(x => x.id === s.id)) continue;
+          try {
+            const r = await api('/api/sales/' + s.id + '/upload', { method: 'POST' });
+            if (r.ok) {
+              sheetConfirmedIds.add(String(s.id));
+              uploadedCount++;
+            }
+          } catch {}
+        }
+      }
+      sheetIdsFetched = true;
+    }
+
+    // 3. Re-verify sheet IDs from Google Sheet
+    await fetchSheetIds();
+
+    if (role === 'admin') {
+      await loadAllSales();
+    }
+    renderSales();
+    stats();
+
+    if (uploadedCount > 0) {
+      showBanner(`✓ Successfully uploaded ${uploadedCount} entr${uploadedCount === 1 ? 'y' : 'ies'} to Google Sheet!`, 'payment');
+    } else {
+      showBanner('All data is already synced with Google Sheet ✓', 'synced');
+    }
+  } catch (err) {
+    showBanner('Upload error: ' + err.message, 'error');
+  } finally {
+    isSyncing = false;
+    updateNetStatus();
+    renderSales();
+  }
+}
+
 async function delSale(id){
   if(!confirm('Delete this entry?'))return;
   const s=activeSales().find(x=>x.id===id);
@@ -277,10 +565,28 @@ async function delSale(id){
     else await api('/api/sales/'+id,{method:'DELETE'});
     sales=sales.filter(x=>x.id!==id);
     allSales=allSales.filter(x=>!(x.id===id&&x.by===(s?s.by:user)));
+    removeFromOfflineQueue(id);
+    sheetConfirmedIds.delete(String(id));
     renderSales();stats()
   }catch(e){alert(e.message)}
 }
-function clearF(){$('sq').value='';$('sd').value='';$('sp').value='';if(role==='admin')$('sm').value='';renderSales()}
+function clearF(){$('sq').value='';$('sd').value='';$('sp').value='';if(role==='admin')$('sm').value='';showOnlyNotUploaded=false;updateFilterBtn();renderSales()}
+function toggleNotUploaded(){
+  showOnlyNotUploaded=!showOnlyNotUploaded;
+  updateFilterBtn();
+  renderSales();
+}
+function updateFilterBtn(){
+  const btn=$('btnNotUploaded');
+  if(!btn)return;
+  if (showOnlyNotUploaded) {
+    btn.classList.add('active');
+    btn.innerHTML='✕ Show all entries';
+  } else {
+    btn.classList.remove('active');
+    btn.innerHTML='⚠ Not uploaded only';
+  }
+}
 function stats(){
   const t=today(),m=t.slice(0,7);
   $('sToday').textContent=inr(sales.filter(s=>s.date===t).reduce((a,s)=>a+s.total,0));
@@ -356,7 +662,7 @@ function renderSync(s){
   }
   el.innerHTML=
     '<span>Google Sheet: <b>connected</b></span>'+
-    (s.lastOk?'<span class="pill">last push '+new Date(s.lastOk).toLocaleTimeString()+'</span>':'')+
+    (s.lastOk?`<span class="pill">last push ${new Date(s.lastOk).toLocaleTimeString()}</span>`:'')+
     (s.queued?`<span class="pill warn">${s.queued} queued</span>`:'')+
     (s.lastError?`<span class="sb-err" title="${esc(s.lastError)}">${esc(s.lastError)}</span>`:'')+
     `<button class="btn ghost" onclick="syncRetry()" ${s.queued?'':'disabled style="opacity:.5"'}>Retry${s.queued?' ('+s.queued+')':''}</button>`+
@@ -372,6 +678,7 @@ async function syncBackfill(){
     const r=await api('/api/sync/backfill',{method:'POST'});
     alert('Pushed '+r.pushed+' sale'+(r.pushed===1?'':'s')+' to the sheet.');
     renderSync(r);
+    setTimeout(fetchSheetIds, 1500);
   }catch(e){alert(e.message)}
 }
 
@@ -384,8 +691,7 @@ function renderTeam(list){
       ? '<span class="pill warn">Pending approval</span>'
       : (isAct ? '<span class="pill okp">Active</span>' : '<span class="pill sb-err">Inactive</span>');
     const roleBadge = `<span class="pill ${isAdm ? 'okp' : ''}">${isAdm ? 'Admin / Owner' : 'Staff / Worker'}</span>`;
-    return `
-    <div class="item"><div><b>${esc(u.name)}</b><small>@${esc(u.user)} · joined ${u.created?u.created.slice(0,10):'—'}</small></div>
+    return `<div class="item"><div><b>${esc(u.name)}</b><small>@${esc(u.user)} · joined ${u.created?u.created.slice(0,10):'—'}</small></div>
     <div style="display:flex;gap:6px;align-items:center">${roleBadge} ${statusBadge}</div>
     <div class="acts2">
       ${isPend?`<button class="btn" onclick="approveUser('${esc(u.user)}')">Approve</button>`:''}
@@ -474,37 +780,79 @@ function renderDash(d){
 }
 
 // ---- auth ----
-// ---- auth ----
 let mode='in';
 function authMode(m){
   mode=m;
   $('aIn').classList.toggle('on',m==='in');
   $('aUp').classList.toggle('on',m==='up');
-  $('aBtn').textContent=m==='in'?'Log in':'Register Staff Account';
+  const btn = $('aBtn');
+  btn.disabled = false;
+  btn.classList.remove('btn-loading');
+  btn.textContent=m==='in'?'Log in':'Register Staff Account';
   $('aSub').textContent=m==='in'?'Log in to record sales':'Staff registration';
   if($('aUpNotice')) $('aUpNotice').classList.toggle('hide', m==='in');
   $('aErr').textContent='';
   $('aErr').className='err';
 }
 async function submitAuth(){
-  const n=$('aUser').value.trim(),pw=$('aPass').value;
-  const e=(t,ok)=>{$('aErr').textContent=t;$('aErr').className=ok?'err ok':'err'};
-  if(n.length<3||pw.length<4)return e('Username: min 3 characters. Password: min 4.');
-  if(!/^[a-z0-9_.-]+$/.test(n))return e('Username: letters, numbers, . _ - only');
-  try{
-    const r=await api('/api/auth/'+(mode==='up'?'signup':'login'),{method:'POST',body:{username:n,password:pw}});
-    if(r.pending){
+  const btn = $('aBtn');
+  const n = $('aUser').value.trim(), pw = $('aPass').value;
+  const originalText = mode === 'in' ? 'Log in' : 'Register Staff Account';
+  const e = (t, ok) => {
+    btn.disabled = false;
+    btn.classList.remove('btn-loading');
+    btn.textContent = originalText;
+    $('aErr').textContent = t;
+    $('aErr').className = ok ? 'err ok' : 'err shake';
+  };
+
+  if (n.length < 3 || pw.length < 4) return e('Username: min 3 characters. Password: min 4.');
+  if (!/^[a-z0-9_.-]+$/.test(n)) return e('Username: letters, numbers, . _ - only');
+
+  btn.disabled = true;
+  btn.classList.add('btn-loading');
+  btn.innerHTML = `<span class="btn-spinner"></span><span>${mode === 'in' ? 'Logging in…' : 'Creating account…'}</span>`;
+  $('aErr').textContent = '';
+  $('aErr').className = 'err';
+
+  try {
+    const r = await api('/api/auth/' + (mode === 'up' ? 'signup' : 'login'), {
+      method: 'POST',
+      body: { username: n, password: pw }
+    });
+
+    if (r.pending) {
+      btn.disabled = false;
+      btn.classList.remove('btn-loading');
+      btn.textContent = originalText;
       authMode('in');
-      e('Staff account created — the owner must approve it before you can log in.',true);
-      $('aUser').value=n;$('aPass').value='';
+      e('Staff account created — the owner must approve it before you can log in.', true);
+      $('aUser').value = n;
+      $('aPass').value = '';
       return;
     }
-    token=r.token;localStorage.setItem('token',token);
-    start(r);
-  }catch(err){e(err.message)}
+
+    btn.innerHTML = `<span>✓ Verified</span>`;
+    token = r.token;
+    localStorage.setItem('token', token);
+    setTimeout(() => {
+      btn.disabled = false;
+      btn.classList.remove('btn-loading');
+      btn.textContent = originalText;
+      start(r);
+    }, 250);
+  } catch (err) {
+    btn.disabled = false;
+    btn.classList.remove('btn-loading');
+    btn.textContent = originalText;
+    e(err.message);
+  }
 }
 function start(d){
   user=d.user;uname=d.name;role=d.role||'member';custom=d.custom||[];sales=norm(d.sales);allSales=[];cart={};cat='All';
+  sheetConfirmedIds = loadCachedConfirmedIds();
+  sheetIdsFetched = sheetConfirmedIds.size > 0;
+  showOnlyNotUploaded = false;
   $('t3').classList.toggle('hide',role!=='admin');
   $('tBadge').classList.add('hide');
   $('uRole').textContent=role==='admin'?'Owner':'Worker';
@@ -517,10 +865,12 @@ function start(d){
   updateNetStatus();
   syncPendingSales();
   if(role==='admin')refreshTeamUsers();
+  setTimeout(fetchSheetIds, 1500);
 }
 async function logout(){
   try{await api('/api/auth/logout',{method:'POST'})}catch{}
   token='';localStorage.removeItem('token');user='';role='member';cart={};allSales=[];teamUsers=[];
+  sheetConfirmedIds=new Set();sheetIdsFetched=false;showOnlyNotUploaded=false;
   $('t3').classList.add('hide');$('tBadge').classList.add('hide');$('uRole').className='tag hide';
   $('sm').classList.add('hide');$('sm').value='';
   updateCart();

@@ -2,13 +2,25 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
 <title>Salon Sales Book</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>✂️</text></svg>">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="style.css">
+<script>
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.getRegistrations().then(function(regs) {
+    for (var i = 0; i < regs.length; i++) regs[i].unregister();
+  });
+}
+</script>
 </head>
 <body>
 <div class="auth" id="auth">
   <div class="acard">
+    <div class="brand-badge">✂️ SIMPLE SALON</div>
     <h1>Salon <span class="pop-color">Sales Book</span></h1>
     <p class="sub" id="aSub">Log in to record sales</p>
     <div class="tabs"><button id="aIn" class="on" onclick="authMode('in')">Log in</button><button id="aUp" onclick="authMode('up')">Staff Sign up</button></div>
@@ -21,8 +33,22 @@
 </div>
 <div class="wrap hide" id="app">
   <header>
-    <h1>Salon <span>Sales Book</span></h1>
-    <div class="usr">👤 <span>Hi, <b id="uName"></b></span><span class="tag hide" id="uRole"></span><button class="lnk" onclick="logout()">Log out</button></div>
+    <div class="brand-row">
+      <div class="brand-title">
+        <span class="brand-ico">✂️</span>
+        <h1>Salon <span class="pop-color">Sales</span></h1>
+      </div>
+      <div class="usr">
+        <button class="header-sync-btn" id="btnHeaderSync" onclick="uploadAll()" title="Manually upload all non-synced data to Google Sheet">
+          <span class="h-sync-icon">☁️</span>
+          <span class="h-sync-text">Sync Data</span>
+          <span class="h-sync-badge hide" id="hSyncBadge">0</span>
+        </button>
+        <span class="u-badge"><i class="u-dot"></i><b id="uName"></b></span>
+        <span class="tag hide" id="uRole"></span>
+        <button class="lnk logout-btn" onclick="logout()" title="Log out">Log out</button>
+      </div>
+    </div>
     <div class="tabs"><button id="t1" class="on" onclick="tab(1)">Services</button><button id="t2" onclick="tab(2)">Sales</button><button id="t3" class="hide" onclick="tab(3)">Dashboard<span class="tb hide" id="tBadge">0</span></button></div>
   </header>
   <div class="net-status hide" id="netStatus"></div>
@@ -30,12 +56,15 @@
   <div class="stats">
     <div class="stat"><small>Today</small><b id="sToday">₹0</b></div>
     <div class="stat"><small>This month</small><b id="sMonth">₹0</b></div>
-    <div class="stat"><small>Entries today</small><b id="sCount">0</b></div>
+    <div class="stat"><small>Entries</small><b id="sCount">0</b></div>
   </div>
 
   <!-- SERVICES -->
   <section id="p1">
-    <div class="bar"><input id="q" placeholder="Search services…" oninput="renderSvc()"></div>
+    <div class="search-box">
+      <span class="s-ic">🔍</span>
+      <input id="q" placeholder="Search services…" oninput="renderSvc()">
+    </div>
     <div class="chips" id="chips"></div>
     <div class="grid" id="grid"></div>
   </section>
@@ -49,6 +78,13 @@
       <select id="sm" class="hide" onchange="renderSales()" title="Team member"><option value="">Everyone</option></select>
       <button class="btn ghost" onclick="clearF()">Clear</button>
       <button class="btn" onclick="exportCSV()">Export CSV</button>
+    </div>
+    <div class="sales-actions-bar" id="salesActionsBar">
+      <button class="btn upload-all-btn" id="btnUploadAll" onclick="uploadAll()" title="Upload all non-synced data to Google Sheet">
+        <span class="up-ic">↑</span> Upload all non-synced <span class="up-badge" id="salesUpBadge">0</span>
+      </button>
+      <button class="btn ghost filter-not-uploaded" id="btnNotUploaded" onclick="toggleNotUploaded()">⚠ Not uploaded only</button>
+      <button class="btn ghost refresh-status-btn" onclick="refreshSheetStatus()" title="Check Google Sheet for upload status">↻ Refresh status</button>
     </div>
     <div class="list" id="list"></div>
     <p style="margin:14px 4px;color:var(--mute);font-size:13px">Filtered total: <b id="ft" style="color:var(--ink)">₹0</b></p>
@@ -121,6 +157,9 @@
   <div class="f"><label>Or new category</label><input id="nCatNew" placeholder="Optional"></div>
   <div class="acts"><button class="btn ghost" onclick="closeM('mSvc')">Cancel</button><button class="btn" onclick="saveSvc()">Add</button></div>
 </div></div>
+
+<!-- FLOATING PROMPT TOAST -->
+<div id="toastPrompt" class="toast-prompt hide" onclick="hidePrompt()"></div>
 
 <script src="/vendor/chart.umd.min.js" defer></script>
 <script src="app.js" defer></script>

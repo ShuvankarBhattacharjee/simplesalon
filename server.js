@@ -26,6 +26,7 @@ const PAYMENTS = ['Cash', 'UPI', 'Card'];
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
 app.use('/vendor', express.static(path.join(__dirname, 'node_modules', 'chart.js', 'dist')));
+app.get('/favicon.ico', (req, res) => res.status(204).end());
 
 // ---- helpers ----
 function requireAuth(req, res, next) {
@@ -337,7 +338,7 @@ app.delete('/api/services/:id', requireAuth, (req, res) => {
 });
 
 // ---- sales ----
-app.post('/api/sales', requireAuth, (req, res) => {
+app.post('/api/sales', requireAuth, async (req, res) => {
   const b = req.body || {};
   const total = Number(b.total);
   const calc = Number(b.calc);
@@ -373,7 +374,7 @@ app.post('/api/sales', requireAuth, (req, res) => {
   }
   sales.unshift(sale);
   db.saveSales(req.user.username, sales);
-  gsheet.push({
+  const ok = await gsheet.push({
     type: 'sale_created',
     data: {
       id: sale.id,
@@ -388,6 +389,7 @@ app.post('/api/sales', requireAuth, (req, res) => {
       note: sale.note
     }
   });
+  if (ok) db.markUploaded([sale.id]);
   res.status(201).json(sale);
 });
 
@@ -398,6 +400,7 @@ app.post('/api/sales/sync', requireAuth, async (req, res) => {
 
   const sales = db.getSales(req.user.username);
   let synced = 0;
+  const syncedIds = [];
 
   for (const b of incoming) {
     const total = Number(b.total);
@@ -423,6 +426,7 @@ app.post('/api/sales/sync', requireAuth, async (req, res) => {
 
     sales.unshift(sale);
     synced++;
+    syncedIds.push(sale.id);
 
     await gsheet.push({
       type: 'sale_created',
@@ -445,6 +449,7 @@ app.post('/api/sales/sync', requireAuth, async (req, res) => {
     sales.sort((a, b) => String(b.date).localeCompare(String(a.date)) || b.id - a.id);
     db.saveSales(req.user.username, sales);
     await gsheet.flush();
+    db.markUploaded(syncedIds);
   }
 
   res.json({ ok: true, synced, sales });
@@ -456,12 +461,159 @@ app.post('/api/sync/flush', requireAuth, async (req, res) => {
   res.json(gsheet.status());
 });
 
+// Get confirmed sales IDs — Google Sheet is the source of truth.
+// If sheet is reachable, return ONLY what's in the sheet and overwrite local cache.
+// If sheet is unreachable, fall back to local cache.
+app.get('/api/sales/sheet', requireAuth, async (req, res) => {
+  try {
+    const list = await gsheet.pullSales();
+    if (Array.isArray(list)) {
+      // Sheet responded — use it as the definitive source of truth
+      const sheetIds = list
+        .filter(s => s && s.id != null && s.id !== '')
+        .map(s => String(s.id));
+      const sheetSet = new Set(sheetIds);
+
+      // Remove any locally-tracked IDs that no longer exist in the sheet
+      const allLocal = db.getUploadedIds();
+      for (const id of allLocal) {
+        if (!sheetSet.has(String(id))) db.unmarkUploaded(id);
+      }
+      // Then write exactly the sheet IDs as confirmed
+      db.markUploaded(sheetIds);
+
+      res.json({ ok: true, ids: sheetIds, count: sheetIds.length, fromSheet: true });
+    } else {
+      // Sheet returned something unexpected — fall back to local cache
+      const ids = db.getUploadedIds().map(String);
+      res.json({ ok: true, ids, count: ids.length, fromSheet: false });
+    }
+  } catch (err) {
+    // Sheet unreachable — fall back to local cache, do NOT clear it
+    const ids = db.getUploadedIds().map(String);
+    res.json({ ok: true, ids, count: ids.length, fromSheet: false, error: err.message });
+  }
+});
+
+// Manually upload a single sale to Google Sheet
+app.post('/api/sales/:id/upload', requireAuth, async (req, res) => {
+  let sale = null;
+  let memberName = req.user.name;
+  const mySales = db.getSales(req.user.username);
+  sale = mySales.find(s => String(s.id) === String(req.params.id));
+
+  if (!sale && auth.isAdmin(req.user.username)) {
+    const users = db.getUsers();
+    for (const [key, u] of Object.entries(users)) {
+      const uSales = db.getSales(key);
+      const found = uSales.find(s => String(s.id) === String(req.params.id));
+      if (found) {
+        sale = found;
+        memberName = u.name;
+        break;
+      }
+    }
+  }
+
+  if (!sale) return res.status(404).json({ error: 'Sale not found' });
+  const ok = await gsheet.push({
+    type: 'sale_created',
+    data: {
+      id: sale.id,
+      date: sale.date,
+      member: memberName,
+      services: (sale.items || [])
+        .map(i => i.name + (i.qty > 1 ? ' ×' + i.qty : ''))
+        .join(', '),
+      pay: sale.pay,
+      calc: sale.calc,
+      total: sale.total,
+      note: sale.note || ''
+    }
+  });
+  await gsheet.flush();
+  if (ok) db.markUploaded([sale.id]);
+  res.json({ ok, id: sale.id });
+});
+
+// Manually upload all non-uploaded sales to Google Sheet
+app.post('/api/sales/upload-all', requireAuth, async (req, res) => {
+  try {
+    const isAdmin = auth.isAdmin(req.user.username);
+    const users = db.getUsers();
+    let salesToInspect = [];
+
+    if (isAdmin) {
+      for (const [key, u] of Object.entries(users)) {
+        for (const s of db.getSales(key)) {
+          salesToInspect.push({ sale: s, memberName: u.name });
+        }
+      }
+    } else {
+      const mySales = db.getSales(req.user.username);
+      const myName = req.user.name || req.user.username;
+      for (const s of mySales) {
+        salesToInspect.push({ sale: s, memberName: myName });
+      }
+    }
+
+    // Pull already uploaded IDs from Google Sheet + local db
+    let sheetIds = new Set(db.getUploadedIds().map(String));
+    try {
+      let sheetSales = await gsheet.pullSales();
+      if (Array.isArray(sheetSales)) {
+        for (const s of sheetSales) {
+          if (s && s.id != null) sheetIds.add(String(s.id));
+        }
+      }
+    } catch {}
+
+    let uploaded = 0;
+    for (const item of salesToInspect) {
+      const s = item.sale;
+      if (!sheetIds.has(String(s.id))) {
+        await gsheet.push({
+          type: 'sale_created',
+          data: {
+            id: s.id,
+            date: s.date,
+            member: item.memberName,
+            services: (s.items || [])
+              .map(i => i.name + (i.qty > 1 ? ' ×' + i.qty : ''))
+              .join(', '),
+            pay: s.pay,
+            calc: s.calc,
+            total: s.total,
+            note: s.note || ''
+          }
+        });
+        sheetIds.add(String(s.id));
+        uploaded++;
+      }
+    }
+
+    // Flush any pending events in the queue to Google Sheet
+    await gsheet.flush();
+    db.markUploaded(Array.from(sheetIds));
+
+    res.json({
+      ok: true,
+      uploaded,
+      total: salesToInspect.length,
+      confirmedIds: Array.from(sheetIds)
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.delete('/api/sales/:id', requireAuth, (req, res) => {
   const sales = db.getSales(req.user.username);
   const next = sales.filter(s => String(s.id) !== req.params.id);
   if (next.length === sales.length)
     return res.status(404).json({ error: 'Sale not found' });
   db.saveSales(req.user.username, next);
+  db.unmarkUploaded(req.params.id);
   gsheet.push({ type: 'sale_deleted', data: { id: Number(req.params.id), by: req.user.username } });
   res.json({ ok: true });
 });

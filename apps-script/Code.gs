@@ -18,10 +18,22 @@ function doPost(e) {
       return out({ ok: true, users: getTeamUsers_(ss) });
     }
 
+    if (body.type === 'get_sales' || body.type === 'get_sheet_sales') {
+      return out({ ok: true, sales: getSheetSales_(ss) });
+    }
+
     if (body.type === 'sale_created') {
       const r = body.data;
       if (findRowByCol_(sales, String(r.id), 1) < 0) {
         sales.appendRow([r.id, r.date, r.member, r.services, r.pay, r.calc, r.total, r.note, now]);
+      }
+    } else if (body.type === 'sales_batch' || body.type === 'batch_sales_created') {
+      const list = Array.isArray(body.data) ? body.data : [];
+      for (let i = 0; i < list.length; i++) {
+        const r = list[i];
+        if (findRowByCol_(sales, String(r.id), 1) < 0) {
+          sales.appendRow([r.id, r.date, r.member, r.services, r.pay, r.calc, r.total, r.note, now]);
+        }
       }
     } else if (body.type === 'sale_deleted') {
       const row = findRowByCol_(sales, String(body.data.id), 1);
@@ -69,6 +81,9 @@ function doGet(e) {
     if (action === 'get_users' || action === 'get_team') {
       return out({ ok: true, users: getTeamUsers_(ss) });
     }
+    if (action === 'get_sales' || action === 'get_sheet_sales') {
+      return out({ ok: true, sales: getSheetSales_(ss) });
+    }
     return out({ ok: true, message: 'Salon sheet endpoint is live' });
   } catch (err) {
     return out({ ok: false, error: String(err) });
@@ -101,6 +116,32 @@ function getTeamUsers_(ss) {
         joined: joined,
         syncedAt: syncedAt,
         role: role || 'Worker'
+      });
+    }
+  }
+  return list;
+}
+
+function getSheetSales_(ss) {
+  const sales = ss.getSheetByName('Sales');
+  if (!sales) return [];
+  const last = sales.getLastRow();
+  if (last < 2) return [];
+  const values = sales.getRange(2, 1, last - 1, 9).getValues();
+  const list = [];
+  for (let i = 0; i < values.length; i++) {
+    const row = values[i];
+    const id = row[0];
+    if (id !== '' && id != null) {
+      list.push({
+        id: String(id),
+        date: row[1] ? (row[1] instanceof Date ? row[1].toISOString().slice(0, 10) : String(row[1])) : '',
+        member: String(row[2] || ''),
+        services: String(row[3] || ''),
+        pay: String(row[4] || ''),
+        calc: Number(row[5]) || 0,
+        total: Number(row[6]) || 0,
+        note: String(row[7] || '')
       });
     }
   }
