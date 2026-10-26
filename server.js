@@ -19,9 +19,9 @@ app.use((req, res, next) => {
   next();
 });
 
-const USER_RE = /^[a-z0-9_.-]+$/i;
+const USER_OR_EMAIL_RE = /^[a-z0-9_.@+-]+$/i;
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
-const PAYMENTS = ['Cash', 'UPI', 'Card'];
+const PAYMENTS = ['Cash', 'UPI', 'Pending', 'Card'];
 
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
@@ -138,14 +138,21 @@ function requireAdmin(req, res, next) {
   next();
 }
 
-function validateCredentials(body) {
+function validateCredentials(body, isSignup = false) {
   const username = String(body.username || '').trim();
   const password = String(body.password || '');
-  if (username.length < 3 || password.length < 4)
-    return { error: 'Username: min 3 characters. Password: min 4.' };
-  if (!USER_RE.test(username))
-    return { error: 'Username: letters, numbers, . _ - only' };
-  return { key: username.toLowerCase(), username };
+  const name = String(body.name || '').trim();
+
+  if (isSignup && name.length < 2) {
+    return { error: 'Please enter your full name (minimum 2 characters).' };
+  }
+  if (username.length < 3 || password.length < 4) {
+    return { error: 'Username / Email: min 3 characters. Password: min 4.' };
+  }
+  if (!USER_OR_EMAIL_RE.test(username)) {
+    return { error: 'Username / Email: letters, numbers, @ . _ - + only' };
+  }
+  return { key: username.toLowerCase(), username, name: name || username };
 }
 
 // ---- auth ----
@@ -154,13 +161,14 @@ app.get('/api/status', (req, res) => {
 });
 
 app.post('/api/auth/signup', async (req, res) => {
-  const v = validateCredentials(req.body);
+  const v = validateCredentials(req.body, true);
   if (v.error) return res.status(400).json({ error: v.error });
-  const result = await auth.createUser(v.key, v.username, req.body.password);
+  const result = await auth.createUser(v.key, v.name, req.body.password);
   if (result.error) return res.status(409).json({ error: result.error });
   res.json({
     pending: true,
-    message: 'Staff account created. Please wait for owner approval.'
+    deactivated: true,
+    message: 'Team account registered with status Deactivated. An approval request has been sent to the owner.'
   });
 });
 
@@ -172,10 +180,10 @@ app.post('/api/auth/login', async (req, res) => {
     const statusCode = result.code === 'inactive' ? 403 : 401;
     return res.status(statusCode).json({ error: result.error, code: result.code });
   }
-  if (result.pending) {
+  if (result.pending || result.deactivated) {
     return res.status(403).json({
-      error: result.error || 'Your account is waiting for owner approval',
-      code: 'pending'
+      error: result.error || 'Your account is deactivated and awaiting owner approval.',
+      code: result.code || 'deactivated'
     });
   }
   const user = result.user;
@@ -195,7 +203,8 @@ app.post('/api/auth/login', async (req, res) => {
     role: user.role,
     status: user.status,
     services,
-    sales: userSales
+    sales: userSales,
+    shopName: db.getSettings().shopName || 'Simple Salon'
   });
 });
 
@@ -216,6 +225,21 @@ app.post('/api/admin/setup', async (req, res) => {
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
+});
+
+app.get('/api/settings', (req, res) => {
+  res.json(db.getSettings());
+});
+
+app.put('/api/admin/settings', requireAuth, requireAdmin, async (req, res) => {
+  const shopName = String(req.body.shopName || '').trim();
+  if (!shopName || shopName.length < 2) {
+    return res.status(400).json({ error: 'Shop name must be at least 2 characters' });
+  }
+  const current = db.getSettings();
+  const updated = { ...current, shopName };
+  db.saveSettings(updated);
+  res.json({ ok: true, settings: updated, shopName });
 });
 
 app.get('/api/bootstrap', requireAuth, async (req, res) => {
@@ -239,7 +263,8 @@ app.get('/api/bootstrap', requireAuth, async (req, res) => {
       name: req.user.name,
       role: req.user.role || (auth.isAdmin(req.user.username) ? 'admin' : 'member'),
       services,
-      sales
+      sales,
+      shopName: db.getSettings().shopName || 'Simple Salon'
     });
   } catch (err) {
     console.error('Bootstrap error:', err.message);
@@ -489,6 +514,68 @@ app.post('/api/services', requireAuth, async (req, res) => {
   });
 
   res.status(201).json(service);
+});
+
+app.put('/api/services/:id', requireAuth, requireAdmin, async (req, res) => {
+  const name = String(req.body.name || '').trim();
+  const price = Number(req.body.price);
+  const cat = String(req.body.cat || '').trim();
+  const ic = String(req.body.ic || '⭐').trim();
+
+  if (!name || req.body.price === '' || !Number.isFinite(price) || price < 0)
+    return res.status(400).json({ error: 'Enter valid name and price' });
+  if (!cat) return res.status(400).json({ error: 'Enter a category' });
+
+  const current = await getOrSyncServices();
+  const index = current.findIndex(s => String(s.id) === String(req.params.id));
+  if (index === -1)
+    return res.status(404).json({ error: 'Service not found' });
+
+  const old = current[index];
+  const changes = [];
+  if (old.name !== name) changes.push(`Name: "${old.name}" → "${name}"`);
+  if (Number(old.price) !== price) changes.push(`Price: ₹${old.price} → ₹${price}`);
+  if (old.cat !== cat) changes.push(`Category: "${old.cat}" → "${cat}"`);
+  if ((old.ic || '⭐') !== ic) changes.push(`Icon: "${old.ic || '⭐'}" → "${ic}"`);
+
+  const now = new Date();
+  const dateStr = now.toISOString().slice(0, 10);
+  const timeStr = now.toLocaleTimeString('en-IN', { hour12: true });
+  const editor = req.user.name || req.user.username || 'Admin';
+  const changeDesc = changes.length > 0 ? changes.join(', ') : 'No changes';
+  const auditEntry = `[${dateStr} ${timeStr} by ${editor}]: ${changeDesc}`;
+
+  const previousAudit = old.auditLog || '';
+  const fullAudit = previousAudit ? `${auditEntry} | ${previousAudit}` : auditEntry;
+
+  const updatedService = {
+    ...old,
+    name,
+    price,
+    cat,
+    ic,
+    auditLog: fullAudit,
+    lastAudit: auditEntry
+  };
+
+  current[index] = updatedService;
+  db.saveServices(current);
+
+  // Sync update & audit entry to Google Sheet Services tab
+  await gsheet.push({
+    type: 'service_updated',
+    data: {
+      id: updatedService.id,
+      name: updatedService.name,
+      price: updatedService.price,
+      cat: updatedService.cat,
+      ic: updatedService.ic,
+      auditEntry,
+      fullAudit
+    }
+  });
+
+  res.json({ ok: true, service: updatedService, auditEntry });
 });
 
 app.delete('/api/services/:id', requireAuth, async (req, res) => {

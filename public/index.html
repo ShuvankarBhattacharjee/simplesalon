@@ -40,10 +40,19 @@ try {
     <div class="brand-badge">✂️ SIMPLE SALON</div>
     <h1>Salon <span class="pop-color">Sales Book</span></h1>
     <p class="sub" id="aSub">Log in to record sales</p>
-    <div class="tabs"><button id="aIn" class="on" onclick="authMode('in')">Log in</button><button id="aUp" onclick="authMode('up')">Staff Sign up</button></div>
-    <div class="notice hide" id="aUpNotice" style="font-size:12px;color:var(--mute);margin:0 0 12px;background:#f5f3ef;padding:8px 10px;border-radius:6px;border:1px solid #e5e0d8">Staff accounts only. Admin accounts are managed directly in the Google Sheet.</div>
-    <div class="f"><label>Username</label><input id="aUser" autocomplete="username" placeholder="e.g. rahul"></div>
-    <div class="f"><label>Password</label><input id="aPass" type="password" autocomplete="current-password" onkeydown="if(event.key==='Enter')submitAuth()"></div>
+    <div class="tabs"><button id="aIn" class="on" onclick="authMode('in')">Log in</button><button id="aUp" onclick="authMode('up')">Team Sign up</button></div>
+    <div class="notice hide" id="aUpNotice" style="font-size:12px;color:var(--mute);margin:0 0 12px;background:#f5f3ef;padding:8px 10px;border-radius:6px;border:1px solid #e5e0d8">Enter your details to register. New accounts are saved with status <b>Deactivated</b> until approved by the owner.</div>
+    <div class="f hide" id="aNameBox"><label id="aNameLabel" for="aName">Full Name</label><input id="aName" autocomplete="name" placeholder="e.g. Rahul Sharma"></div>
+    <div class="f"><label id="aUserLabel" for="aUser">Username / Email</label><input id="aUser" autocomplete="username" placeholder="e.g. rahul or rahul@gmail.com"></div>
+    <div class="f">
+      <label id="aPassLabel" for="aPass">Password</label>
+      <div class="pass-wrap">
+        <input id="aPass" type="password" autocomplete="current-password" onkeydown="if(event.key==='Enter')submitAuth()">
+        <button type="button" class="btn-toggle-pass" id="btnTogglePass" onclick="togglePassword()" title="Show/Hide Password" aria-label="Toggle password visibility">
+          <span id="passIcon" class="pass-ico">👁️</span>
+        </button>
+      </div>
+    </div>
     <div class="err" id="aErr"></div>
     <button class="btn" style="width:100%" id="aBtn" onclick="submitAuth()">Log in</button>
   </div>
@@ -51,9 +60,10 @@ try {
 <div class="wrap hide" id="app">
   <header>
     <div class="brand-row">
-      <div class="brand-title">
+      <div class="brand-title" id="brandTitleBox">
         <span class="brand-ico">✂️</span>
-        <h1>Salon <span class="pop-color">Sales</span></h1>
+        <h1 id="brandTitleHeading"><span id="brandShopName">Simple Salon</span> <span class="pop-color">Sales</span></h1>
+        <button type="button" class="btn-edit-shop hide" id="btnEditShop" onclick="openEditShopModal()" title="Change Shop Name">✏️</button>
       </div>
       <div class="usr">
         <button class="header-sync-btn" id="btnHeaderSync" onclick="uploadAll()" title="Manually upload all non-synced data to Google Sheet">
@@ -63,7 +73,7 @@ try {
         </button>
         <span class="u-badge"><i class="u-dot"></i><b id="uName"></b></span>
         <span class="tag hide" id="uRole"></span>
-        <button class="lnk logout-btn" onclick="logout()" title="Log out">Log out</button>
+        <button class="logout-btn" onclick="logout()" title="Log out"><span class="logout-ico">⏻</span> Log out</button>
       </div>
     </div>
     <div class="tabs"><button id="t1" class="on" onclick="tab(1)">Services</button><button id="t2" onclick="tab(2)">Sales</button><button id="t3" class="hide" onclick="tab(3)">Dashboard<span class="tb hide" id="tBadge">0</span></button></div>
@@ -88,13 +98,39 @@ try {
 
   <!-- SALES -->
   <section id="p2" class="hide">
-    <div class="bar">
-      <input id="sq" placeholder="Search service or note…" oninput="renderSales()">
-      <input type="date" id="sd" style="width:auto" onchange="renderSales()">
-      <select id="sp" onchange="renderSales()"><option value="">All payments</option><option>Cash</option><option>UPI</option><option>Card</option></select>
-      <select id="sm" class="hide" onchange="renderSales()" title="Team member"><option value="">Everyone</option></select>
-      <button class="btn ghost" onclick="clearF()">Clear</button>
-      <button class="btn" onclick="exportCSV()">Export CSV</button>
+    <div class="sales-toolbar-card">
+      <div class="sales-date-bar">
+        <!-- 3 Date Filter Buttons: Today (default), Yesterday, Custom -->
+        <div class="s-date-pills">
+          <button type="button" class="s-date-btn on" id="btnSalesToday" onclick="setSalesDateFilter('today')">📅 Today</button>
+          <button type="button" class="s-date-btn" id="btnSalesYesterday" onclick="setSalesDateFilter('yesterday')">⏮️ Yesterday</button>
+          <button type="button" class="s-date-btn" id="btnSalesCustom" onclick="setSalesDateFilter('custom')">🗓️ Custom</button>
+        </div>
+
+        <!-- Custom Date Picker: Appears ONLY when Custom is clicked -->
+        <div id="salesCustomDateBox" class="hide sales-custom-date-box">
+          <input type="date" id="sd" onchange="renderSales()" title="Pick custom date">
+        </div>
+
+        <!-- Two Share Buttons: WhatsApp and Share Anywhere -->
+        <div class="sales-share-actions">
+          <button type="button" class="btn btn-wa-direct" onclick="shareCurrentSalesWhatsApp()" title="Share through WhatsApp with PDF">
+            <span class="wa-ico">💬</span> WhatsApp
+          </button>
+          <button type="button" class="btn btn-share-anywhere" onclick="shareCurrentSalesAnywhere()" title="Share PDF anywhere (WhatsApp, Email, Drive, etc.)">
+            <span class="share-ico">📤</span> Share
+          </button>
+        </div>
+      </div>
+
+      <!-- Filter Controls -->
+      <div class="bar sales-filter-subbar">
+        <input id="sq" placeholder="Search service or note…" oninput="renderSales()">
+        <select id="sp" onchange="renderSales()"><option value="">All payments</option><option>Cash</option><option>UPI</option><option>Pending</option><option>Card</option></select>
+        <select id="sm" class="hide" onchange="renderSales()" title="Team member"><option value="">Everyone</option></select>
+        <button class="btn ghost" onclick="clearF()">Clear</button>
+        <button class="btn ghost" onclick="exportCSV()">Export CSV</button>
+      </div>
     </div>
     <div class="sales-actions-bar" id="salesActionsBar">
       <button class="btn upload-all-btn" id="btnUploadAll" onclick="uploadAll()" title="Upload all non-synced data to Google Sheet">
@@ -114,8 +150,9 @@ try {
       <span style="align-self:center;color:var(--mute);font-size:13px">to</span>
       <input type="date" id="fTo" style="width:auto" onchange="loadDash()" title="To date">
       <select id="fUser" onchange="loadDash()"><option value="">All members</option></select>
-      <select id="fPay" onchange="loadDash()"><option value="">All payments</option><option>Cash</option><option>UPI</option><option>Card</option></select>
+      <select id="fPay" onchange="loadDash()"><option value="">All payments</option><option>Cash</option><option>UPI</option><option>Pending</option><option>Card</option></select>
       <button class="btn ghost" onclick="clearDashF()">Clear</button>
+      <button class="btn btn-wa-report" onclick="openShareModal()" title="Share sales report on WhatsApp as PDF"><span class="wa-ico">💬</span> WhatsApp PDF</button>
       <button class="btn" onclick="loadDash()">Refresh</button>
     </div>
 
@@ -138,6 +175,19 @@ try {
     <h3 style="font-size:15px;font-weight:600;margin:22px 4px 10px">Team performance</h3>
     <div class="list" id="mList"></div>
 
+    <!-- PENDING APPROVAL REQUESTS (Owner Only) -->
+    <div id="pendingApprovalsBox" class="pending-approvals-card hide">
+      <div class="pa-header">
+        <div class="pa-title">
+          <span class="pa-ico">🔔</span>
+          <h3 style="margin:0;font-size:15px;font-weight:700">Approval Requests (<span id="paCount">0</span>)</h3>
+        </div>
+        <span class="pill warn" style="font-size:11px;font-weight:600">Pending Approval</span>
+      </div>
+      <p class="pa-sub">New team members are registered with <b>Deactivated</b> status and cannot log in until you approve them below.</p>
+      <div class="pa-list" id="paList"></div>
+    </div>
+
     <div style="display:flex;justify-content:space-between;align-items:center;margin:22px 4px 10px">
       <h3 style="font-size:15px;font-weight:600;margin:0">Team access</h3>
       <button class="btn ghost" style="font-size:12px;padding:4px 10px" onclick="syncTeamFromSheet()">Sync from Sheet</button>
@@ -153,14 +203,54 @@ try {
 <div class="modal" id="mSale"><div class="box">
   <h2>Confirm sale</h2><p class="sub">Review items, choose payment, adjust total if needed</p>
   <div id="ckItems"></div>
-  <div class="row" style="margin-top:14px">
-    <div class="f"><label>Payment mode</label><select id="cPay"><option>Cash</option><option>UPI</option><option>Card</option></select></div>
-    <div class="f"><label>Date</label><input id="cDate" type="date"></div>
+  <div class="f payment-mode-group" style="margin-top:14px">
+    <label>Payment mode</label>
+    <div class="pay-btn-group" id="payBtnGroup">
+      <button type="button" class="pay-btn pay-cash on" id="btnPayCash" onclick="setPayMode('Cash')">
+        <span class="pay-ico">💵</span> Cash
+      </button>
+      <button type="button" class="pay-btn pay-upi" id="btnPayUPI" onclick="setPayMode('UPI')">
+        <span class="pay-ico">📱</span> UPI
+      </button>
+      <button type="button" class="pay-btn pay-pending" id="btnPayPending" onclick="setPayMode('Pending')">
+        <span class="pay-ico">⏳</span> Pending
+      </button>
+    </div>
+    <input type="hidden" id="cPay" value="Cash">
+  </div>
+  <div class="f" style="margin-top:12px">
+    <label for="cDate">Date</label>
+    <div class="date-input-wrap">
+      <input id="cDate" type="date" class="checkout-date-input">
+    </div>
   </div>
   <div class="f"><label>Total amount (₹) — editable</label><input id="cTot" type="number" min="0" style="font-size:18px;font-weight:600" oninput="edited=true"></div>
   <div style="display:flex;justify-content:space-between;margin:-4px 0 12px;font-size:12px;color:var(--mute)"><span>Calculated: <b id="ckCalc">₹0</b></span><button class="lnk" onclick="edited=false;ckRender()">Reset to calculated</button></div>
   <div class="f"><label>Notes (optional)</label><input id="cNote"></div>
-  <div class="acts"><button class="btn ghost" onclick="closeM('mSale')">Back</button><button class="btn" onclick="saveSale()">Enter data</button></div>
+  <div class="acts"><button class="btn ghost" onclick="handleCheckoutBack()">Back</button><button class="btn" onclick="saveSale()">Enter data</button></div>
+</div></div>
+
+<!-- EDIT SERVICE MODAL (Admin Only) -->
+<div class="modal" id="mEditSvc"><div class="box">
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
+    <h2 style="margin:0">Edit service</h2>
+    <span class="tag" style="font-size:10px">Admin Only</span>
+  </div>
+  <p class="sub">Changes sync & audit log with timestamp into Google Sheet</p>
+  <input type="hidden" id="eId">
+  <div class="f"><label>Name</label><input id="eName" placeholder="e.g. Haircut"></div>
+  <div class="row">
+    <div class="f"><label>Default price (₹)</label><input id="ePrice" type="number" min="0"></div>
+    <div class="f"><label>Category</label><select id="eCat"></select></div>
+  </div>
+  <div class="row">
+    <div class="f"><label>Or new category</label><input id="eCatNew" placeholder="Optional"></div>
+    <div class="f"><label>Emoji / Icon</label><input id="eIc" placeholder="e.g. ✂️, 💈" value="⭐"></div>
+  </div>
+  <div id="eAuditInfo" class="hide" style="font-size:11.5px;color:var(--mute);background:#fbfaf8;border:1px solid var(--line);border-radius:10px;padding:8px 10px;margin-bottom:12px;word-break:break-word">
+    <b style="color:var(--ink)">Last change:</b> <span id="eAuditText"></span>
+  </div>
+  <div class="acts"><button class="btn ghost" id="btnCancelEditSvc" onclick="closeM('mEditSvc')">Cancel</button><button class="btn" id="btnSaveEditSvc" onclick="saveEditSvc()">Save changes</button></div>
 </div></div>
 
 <!-- ADD SERVICE MODAL -->
@@ -178,10 +268,85 @@ try {
   <div class="acts"><button class="btn ghost" id="btnCancelSvc" onclick="closeM('mSvc')">Cancel</button><button class="btn" id="btnSaveSvc" onclick="saveSvc()">Add service</button></div>
 </div></div>
 
+<!-- CHANGE SHOP NAME MODAL (Owner Only) -->
+<div class="modal" id="mShopName"><div class="box">
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
+    <h2 style="margin:0">Change Shop Name</h2>
+    <span class="tag" style="font-size:10px">Owner Only</span>
+  </div>
+  <p class="sub">This name will appear on all headers, WhatsApp messages, and PDF sales reports</p>
+  <div class="f">
+    <label for="shopNameInput">Shop / Salon Name</label>
+    <input id="shopNameInput" placeholder="e.g. Simple Salon" maxlength="60" onkeydown="if(event.key==='Enter')saveShopName()">
+  </div>
+  <div class="acts">
+    <button class="btn ghost" onclick="closeM('mShopName')">Cancel</button>
+    <button class="btn" id="btnSaveShopName" onclick="saveShopName()">Save Shop Name</button>
+  </div>
+</div></div>
+
+<!-- WHATSAPP / PDF SHARE REPORT MODAL -->
+<div class="modal" id="mShare"><div class="box">
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
+    <h2 style="margin:0">Share Sales Report</h2>
+    <span class="pill okp" style="font-size:11px;font-weight:700">📱 WhatsApp PDF</span>
+  </div>
+  <p class="sub">Generate a salon-branded PDF report & share directly to WhatsApp</p>
+
+  <div class="f">
+    <label>Select Period</label>
+    <div class="period-pills" id="periodPills">
+      <button type="button" class="period-pill on" id="pillToday" onclick="selectPeriod('today')">📅 Today</button>
+      <button type="button" class="period-pill" id="pillYesterday" onclick="selectPeriod('yesterday')">⏮️ Yesterday</button>
+      <button type="button" class="period-pill" id="pillCustom" onclick="selectPeriod('custom')">🗓️ Custom Date</button>
+    </div>
+  </div>
+
+  <div id="customDateRange" class="hide" style="margin-bottom:12px">
+    <div class="row">
+      <div class="f">
+        <label for="shareFrom">From Date</label>
+        <input type="date" id="shareFrom" onchange="updateSharePreview()">
+      </div>
+      <div class="f">
+        <label for="shareTo">To Date</label>
+        <input type="date" id="shareTo" onchange="updateSharePreview()">
+      </div>
+    </div>
+  </div>
+
+  <div class="share-preview-card" id="sharePreviewCard">
+    <div class="sp-header">
+      <span class="sp-title" id="spPeriodLabel">Today's Sales</span>
+      <span class="sp-count" id="spCount">0 entries</span>
+    </div>
+    <div class="sp-total" id="spTotal">₹0</div>
+    <div class="sp-breakdown">
+      <div class="sp-b-item"><span class="sp-dot dot-cash"></span> Cash: <b id="spCash">₹0</b></div>
+      <div class="sp-b-item"><span class="sp-dot dot-upi"></span> UPI: <b id="spUPI">₹0</b></div>
+      <div class="sp-b-item"><span class="sp-dot dot-pending"></span> Pending: <b id="spPending">₹0</b></div>
+    </div>
+  </div>
+
+  <div class="share-actions">
+    <button class="btn btn-whatsapp" onclick="shareReportWhatsApp()" id="btnWaShare">
+      <span class="wa-btn-icon">💬</span> Share on WhatsApp
+    </button>
+    <button class="btn ghost btn-download-pdf" onclick="downloadReportPDF()" id="btnPdfDownload">
+      <span>📥</span> Download PDF
+    </button>
+  </div>
+  <div style="margin-top:12px;text-align:center">
+    <button class="lnk" onclick="closeM('mShare')" style="color:var(--mute)">Cancel</button>
+  </div>
+</div></div>
+
 <!-- FLOATING PROMPT TOAST -->
 <div id="toastPrompt" class="toast-prompt hide" onclick="hidePrompt()"></div>
 
 <script src="/vendor/chart.umd.min.js" onerror="this.onerror=null;this.src='https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js';" defer></script>
-<script src="app.js" defer></script>
+<script src="/vendor/jspdf.umd.min.js" onerror="this.onerror=null;this.src='https://cdn.jsdelivr.net/npm/jspdf@2.5.2/dist/jspdf.umd.min.js';" defer></script>
+<script src="/vendor/jspdf.plugin.autotable.min.js" onerror="this.onerror=null;this.src='https://cdn.jsdelivr.net/npm/jspdf-autotable@3.8.4/dist/jspdf.plugin.autotable.min.js';" defer></script>
+<script src="app.js"></script>
 </body>
 </html>

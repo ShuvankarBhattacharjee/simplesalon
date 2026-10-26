@@ -23,7 +23,10 @@ function doPost(e) {
     const ss = SpreadsheetApp.getActiveSpreadsheet();
     const sales = sheet_(ss, 'Sales', ['ID', 'Date', 'Member', 'Services', 'Payment', 'Calculated', 'Total', 'Notes', 'Recorded At', 'By']);
     const team = sheet_(ss, 'Team', ['Name', 'Username', 'Password', 'Status', 'Joined', 'Synced At', 'Role']);
-    const servicesSheet = sheet_(ss, 'Services', ['ID', 'Name', 'Price', 'Category', 'Icon']);
+    const servicesSheet = sheet_(ss, 'Services', ['ID', 'Name', 'Price', 'Category', 'Icon', 'Audit Log']);
+    if (servicesSheet.getLastColumn() < 6 || !servicesSheet.getRange(1, 6).getValue()) {
+      servicesSheet.getRange(1, 6).setValue('Audit Log').setFontWeight('bold');
+    }
     const now = new Date();
 
     if (body.type === 'get_services') {
@@ -41,10 +44,22 @@ function doPost(e) {
     if (body.type === 'service_created') {
       const s = body.data;
       const row = findRowByCol_(servicesSheet, s.id, 1);
+      const auditLog = s.auditEntry || s.auditLog || '';
       if (row > 0) {
-        servicesSheet.getRange(row, 1, 1, 5).setValues([[s.id, s.name, Number(s.price) || 0, s.cat || 'General', s.ic || '⭐']]);
+        servicesSheet.getRange(row, 1, 1, 6).setValues([[s.id, s.name, Number(s.price) || 0, s.cat || 'General', s.ic || '⭐', auditLog]]);
       } else {
-        servicesSheet.appendRow([s.id, s.name, Number(s.price) || 0, s.cat || 'General', s.ic || '⭐']);
+        servicesSheet.appendRow([s.id, s.name, Number(s.price) || 0, s.cat || 'General', s.ic || '⭐', auditLog]);
+      }
+    } else if (body.type === 'service_updated') {
+      const s = body.data;
+      const row = findRowByCol_(servicesSheet, String(s.id), 1);
+      const auditEntry = String(s.auditEntry || '').trim();
+      if (row > 0) {
+        let existingAudit = String(servicesSheet.getRange(row, 6).getValue() || '').trim();
+        let fullAudit = existingAudit ? (auditEntry + '\n' + existingAudit) : auditEntry;
+        servicesSheet.getRange(row, 1, 1, 6).setValues([[s.id, s.name, Number(s.price) || 0, s.cat || 'General', s.ic || '⭐', fullAudit]]);
+      } else {
+        servicesSheet.appendRow([s.id, s.name, Number(s.price) || 0, s.cat || 'General', s.ic || '⭐', auditEntry]);
       }
     } else if (body.type === 'service_deleted') {
       const row = findRowByCol_(servicesSheet, String(body.data.id), 1);
@@ -72,9 +87,9 @@ function doPost(e) {
       if (body.type === 'user_removed') {
         if (row > 0) team.deleteRow(row);
       } else {
-        const rawStatus = body.type === 'user_approved' ? 'Active' : (r.status || 'Pending');
-        const status = (rawStatus.toLowerCase() === 'active' || rawStatus.toLowerCase() === 'approved') ? 'Active' : 'Pending';
-        const role = (r.role && (r.role.toLowerCase() === 'admin' || r.role.toLowerCase() === 'owner')) ? 'Owner' : 'Worker';
+        const rawStatus = body.type === 'user_approved' ? 'Active' : (r.status || 'Deactivated');
+        const status = (rawStatus.toLowerCase() === 'active' || rawStatus.toLowerCase() === 'approved') ? 'Active' : 'Deactivated';
+        const role = (r.role && (r.role.toLowerCase() === 'admin' || r.role.toLowerCase() === 'owner')) ? 'Owner' : 'Team';
         const password = r.password || '';
         const name = r.name || r.user;
         const joined = r.joined || now;
@@ -134,7 +149,8 @@ function getServices_(ss) {
       sheet.appendRow(DEFAULT_SERVICES[i]);
     }
   }
-  const rows = sheet.getRange(2, 1, sheet.getLastRow() - 1, 5).getValues();
+  const numCols = Math.max(sheet.getLastColumn(), 6);
+  const rows = sheet.getRange(2, 1, sheet.getLastRow() - 1, numCols).getValues();
   const list = [];
   for (let i = 0; i < rows.length; i++) {
     const r = rows[i];
@@ -146,7 +162,8 @@ function getServices_(ss) {
       name: name,
       price: Number(r[2]) || 0,
       cat: String(r[3] || 'General').trim(),
-      ic: String(r[4] || '⭐').trim()
+      ic: String(r[4] || '⭐').trim(),
+      auditLog: String(r[5] || '').trim()
     });
   }
   return list;
@@ -174,10 +191,10 @@ function getTeamUsers_(ss) {
         name: name || user,
         user: user,
         password: password,
-        status: status || 'Pending',
+        status: status || 'Deactivated',
         joined: joined,
         syncedAt: syncedAt,
-        role: role || 'Worker'
+        role: role || 'Team'
       });
     }
   }
