@@ -502,6 +502,7 @@ function initServiceHoldGestures() {
     if (e.target.closest('.x') || e.target.closest('.add')) return;
     const card = e.target.closest('.svc');
     if (!card || !card.dataset.id) return;
+    if (role !== 'admin') return; // Only admin can edit & delete via holding
 
     holdTriggered = false;
     holdStartX = e.clientX;
@@ -513,17 +514,17 @@ function initServiceHoldGestures() {
       holdTriggered = true;
       if (activeHoldEl) activeHoldEl.classList.remove('holding');
       if (navigator.vibrate) {
-        try { navigator.vibrate(45); } catch {}
+        try { navigator.vibrate(50); } catch {}
       }
-      handleServiceHold(card.dataset.id);
-    }, 550);
+      openEditSvc(card.dataset.id);
+    }, 420);
   });
 
   grid.addEventListener('pointermove', (e) => {
     if (!holdTimeout) return;
     const dx = Math.abs(e.clientX - holdStartX);
     const dy = Math.abs(e.clientY - holdStartY);
-    if (dx > 10 || dy > 10) {
+    if (dx > 15 || dy > 15) {
       clearHold();
     }
   });
@@ -534,13 +535,15 @@ function initServiceHoldGestures() {
     const card = e.target.closest('.svc');
     if (card && !card.classList.contains('add')) {
       e.preventDefault();
+      if (role === 'admin' && card.dataset.id) {
+        openEditSvc(card.dataset.id);
+      }
     }
   });
 }
 
 function handleServiceHold(id) {
   if (role !== 'admin') {
-    showPrompt('🔒 Only owner/admin can edit services', 'error', 3000);
     return;
   }
   openEditSvc(id);
@@ -561,7 +564,7 @@ function renderSvc(){
   const q=$('q').value.toLowerCase();
   const list=all().filter(s=>(cat==='All'||s.cat===cat)&&s.name.toLowerCase().includes(q));
   $('grid').innerHTML=list.map(s=>`
-    <div class="svc ${cart[s.id]?'sel':''}" data-id="${s.id}" onclick="onSvcClick(event, '${s.id}')" title="${role==='admin'?'Tap to add (or edit)':'Tap to add'}">
+    <div class="svc ${cart[s.id]?'sel':''}" data-id="${s.id}" onclick="onSvcClick(event, '${s.id}')" title="${role==='admin'?'Tap to add · Hold to edit or delete':'Tap to add'}">
       ${cart[s.id]?`<span class="badge">${cart[s.id]}</span>`:''}
       ${role==='admin'?`<span class="x" onclick="event.stopPropagation();delSvc('${s.id}')" title="Delete service">✕</span><span class="x" style="right:28px" onclick="event.stopPropagation();openEditSvc('${s.id}')" title="Edit service">✏️</span>`:''}
       <div class="ic">${s.ic||'⭐'}</div><h3>${esc(s.name)}</h3><p>${esc(s.cat)}</p><div class="pr">${inr(s.price)}</div>
@@ -769,13 +772,46 @@ async function saveSvc(){
   }
 }
 async function delSvc(id){
-  if(!confirm('Remove this service from all devices?'))return;
+  const s = all().find(x => String(x.id) === String(id));
+  const name = s ? s.name : 'this service';
+  if(!confirm(`Remove "${name}" from all devices and delete from Google Sheet?`)) return;
   try{
-    await api('/api/services/'+id,{method:'DELETE'});
-    services=services.filter(s=>String(s.id)!==String(id));
+    await api('/api/services/' + encodeURIComponent(id), { method: 'DELETE' });
+    services = services.filter(s => String(s.id) !== String(id));
     localStorage.setItem('cached_services', JSON.stringify(services));
     renderSvc();
-  }catch(e){alert(e.message)}
+    showPrompt(`✓ "${name}" deleted and synced with Google Sheet!`, 'success');
+  }catch(e){ alert(e.message); }
+}
+
+async function deleteFromEditModal() {
+  const id = $('eId').value;
+  const s = all().find(x => String(x.id) === String(id));
+  const name = s ? s.name : ($('eName').value || 'this service');
+  if (!id) return;
+  if (!confirm(`Are you sure you want to delete "${name}"?\n\nThis will remove the service from all devices and delete it from Google Sheet.`)) {
+    return;
+  }
+  const btn = $('btnDeleteEditSvc');
+  if (btn) {
+    btn.setAttribute('disabled', '');
+    btn.innerHTML = '<span class="svc-spinner"></span> Deleting…';
+  }
+  try {
+    await api('/api/services/' + encodeURIComponent(id), { method: 'DELETE' });
+    services = services.filter(x => String(x.id) !== String(id));
+    localStorage.setItem('cached_services', JSON.stringify(services));
+    closeM('mEditSvc');
+    renderSvc();
+    showPrompt(`✓ "${name}" deleted and synced with Google Sheet!`, 'success');
+  } catch (err) {
+    alert('Failed to delete service: ' + err.message);
+  } finally {
+    if (btn) {
+      btn.removeAttribute('disabled');
+      btn.innerHTML = '<span>🗑️</span> Delete';
+    }
+  }
 }
 
 // ---- edit service (Admin only with Google Sheet audit log) ----
@@ -796,13 +832,17 @@ function openEditSvc(id) {
   } else {
     $('eAuditInfo').classList.add('hide');
   }
-  const btn = $('btnSaveEditSvc'), cancelBtn = $('btnCancelEditSvc');
+  const btn = $('btnSaveEditSvc'), cancelBtn = $('btnCancelEditSvc'), delBtn = $('btnDeleteEditSvc');
   if (btn) {
     btn.removeAttribute('disabled');
     btn.classList.remove('svc-btn-loading');
     btn.innerHTML = '<span class="svc-btn-text">Save changes</span>';
   }
   if (cancelBtn) cancelBtn.removeAttribute('disabled');
+  if (delBtn) {
+    delBtn.removeAttribute('disabled');
+    delBtn.innerHTML = '<span>🗑️</span> Delete';
+  }
   $('mEditSvc').classList.add('show');
 }
 

@@ -413,9 +413,13 @@
         style="font-size:11.5px;color:var(--mute);background:#fbfaf8;border:1px solid var(--line);border-radius:10px;padding:8px 10px;margin-bottom:12px;word-break:break-word">
         <b style="color:var(--ink)">Last change:</b> <span id="eAuditText"></span>
       </div>
-      <div class="acts"><button class="btn ghost" id="btnCancelEditSvc"
-          onclick="closeM('mEditSvc')">Cancel</button><button class="btn" id="btnSaveEditSvc"
-          onclick="saveEditSvc()">Save changes</button></div>
+      <div class="acts edit-svc-actions">
+        <button type="button" class="btn btn-delete-svc" id="btnDeleteEditSvc" onclick="deleteFromEditModal()" title="Delete this service from all devices">
+          <span>🗑️</span> Delete
+        </button>
+        <button type="button" class="btn ghost" id="btnCancelEditSvc" onclick="closeM('mEditSvc')">Cancel</button>
+        <button type="button" class="btn" id="btnSaveEditSvc" onclick="saveEditSvc()">Save changes</button>
+      </div>
     </div>
   </div>
 
