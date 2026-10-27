@@ -21,6 +21,7 @@ function doPost(e) {
       return out({ ok: false, error: 'Bad secret' });
     }
     const ss = SpreadsheetApp.getActiveSpreadsheet();
+    try { ss.setSpreadsheetTimeZone("Asia/Kolkata"); } catch(e) {}
     const sales = sheet_(ss, 'Sales', ['ID', 'Date', 'Member', 'Services', 'Payment', 'Calculated', 'Total', 'Notes', 'Recorded At', 'By']);
     const team = sheet_(ss, 'Team', ['Name', 'Username', 'Password', 'Status', 'Joined', 'Synced At', 'Role']);
     const servicesSheet = sheet_(ss, 'Services', ['ID', 'Name', 'Price', 'Category', 'Icon', 'Audit Log']);
@@ -67,14 +68,16 @@ function doPost(e) {
     } else if (body.type === 'sale_created') {
       const r = body.data;
       if (findRowByCol_(sales, String(r.id), 1) < 0) {
-        sales.appendRow([r.id, r.date, r.member, r.services, r.pay, r.calc, r.total, r.note, now, r.by || '']);
+        const sDate = String(r.date || '').slice(0, 10);
+        sales.appendRow(["'" + String(r.id), "'" + sDate, r.member, r.services, r.pay, r.calc, r.total, r.note, now, r.by || '']);
       }
     } else if (body.type === 'sales_batch' || body.type === 'batch_sales_created') {
       const list = Array.isArray(body.data) ? body.data : [];
       for (let i = 0; i < list.length; i++) {
         const r = list[i];
         if (findRowByCol_(sales, String(r.id), 1) < 0) {
-          sales.appendRow([r.id, r.date, r.member, r.services, r.pay, r.calc, r.total, r.note, now, r.by || '']);
+          const sDate = String(r.date || '').slice(0, 10);
+          sales.appendRow(["'" + String(r.id), "'" + sDate, r.member, r.services, r.pay, r.calc, r.total, r.note, now, r.by || '']);
         }
       }
     } else if (body.type === 'sale_deleted') {
@@ -120,6 +123,7 @@ function doGet(e) {
       return out({ ok: false, error: 'Bad secret' });
     }
     const ss = SpreadsheetApp.getActiveSpreadsheet();
+    try { ss.setSpreadsheetTimeZone("Asia/Kolkata"); } catch(e) {}
     if (action === 'get_services') {
       return out({ ok: true, services: getServices_(ss) });
     }
@@ -207,24 +211,64 @@ function getSheetSales_(ss) {
   const last = sales.getLastRow();
   if (last < 2) return [];
   const values = sales.getRange(2, 1, last - 1, 10).getValues();
+  const displayValues = sales.getRange(2, 1, last - 1, 10).getDisplayValues();
   const list = [];
   for (let i = 0; i < values.length; i++) {
     const row = values[i];
-    const id = row[0];
+    const dispRow = displayValues[i];
+    const id = row[0] || dispRow[0];
     if (id !== '' && id != null) {
       let timeStr = '';
       let timestamp = '';
       if (row[8]) {
         if (row[8] instanceof Date) {
-          timeStr = Utilities.formatDate(row[8], ss.getSpreadsheetTimeZone() || "Asia/Kolkata", "hh:mm a");
+          timeStr = Utilities.formatDate(row[8], "Asia/Kolkata", "hh:mm a");
           timestamp = Utilities.formatDate(row[8], "GMT", "yyyy-MM-dd'T'HH:mm:ss'Z'");
         } else {
           timeStr = String(row[8]);
         }
       }
+
+      // Safe date resolution:
+      let dateStr = '';
+      const dispDate = String(dispRow[1] || '').trim();
+      const matchYMD = dispDate.match(/^(\d{4})[-/](\d{1,2})[-/](\d{1,2})/);
+      const matchDMY = dispDate.match(/^(\d{1,2})[-/](\d{1,2})[-/](\d{4})/);
+      if (matchYMD) {
+        dateStr = matchYMD[1] + '-' + matchYMD[2].padStart(2, '0') + '-' + matchYMD[3].padStart(2, '0');
+      } else if (matchDMY) {
+        dateStr = matchDMY[3] + '-' + matchDMY[2].padStart(2, '0') + '-' + matchDMY[1].padStart(2, '0');
+      }
+
+      // If id is a millisecond timestamp, calculate true India date (Asia/Kolkata)
+      const idNum = Number(id);
+      if (idNum > 1600000000000 && idNum < 2500000000000) {
+        try {
+          const idDate = Utilities.formatDate(new Date(idNum), "Asia/Kolkata", "yyyy-MM-dd");
+          if (!dateStr) {
+            dateStr = idDate;
+          } else {
+            const d1 = new Date(dateStr + "T00:00:00Z").getTime();
+            const d2 = new Date(idDate + "T00:00:00Z").getTime();
+            if (Math.abs(d1 - d2) <= 86400000) {
+              dateStr = idDate;
+            }
+          }
+        } catch(e) {}
+      }
+
+      // Fallback to row[1] Date in Asia/Kolkata timezone
+      if (!dateStr && row[1]) {
+        if (row[1] instanceof Date) {
+          dateStr = Utilities.formatDate(row[1], "Asia/Kolkata", "yyyy-MM-dd");
+        } else {
+          dateStr = String(row[1]).slice(0, 10);
+        }
+      }
+
       list.push({
         id: String(id),
-        date: row[1] ? (row[1] instanceof Date ? Utilities.formatDate(row[1], ss.getSpreadsheetTimeZone() || "Asia/Kolkata", "yyyy-MM-dd") : String(row[1]).slice(0, 10)) : '',
+        date: dateStr,
         time: timeStr,
         timestamp: timestamp,
         member: String(row[2] || ''),

@@ -77,6 +77,27 @@ function normalizeDateStr(d) {
   return String(d).slice(0, 10);
 }
 
+function resolveSaleDate(rawDate, saleId) {
+  const idNum = Number(saleId);
+  if (idNum > 1600000000000 && idNum < 2500000000000) {
+    try {
+      const idDate = new Date(idNum);
+      if (!isNaN(idDate.getTime())) {
+        const formatter = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Kolkata', year: 'numeric', month: '2-digit', day: '2-digit' });
+        const computedFromId = formatter.format(idDate);
+        if (!rawDate) return computedFromId;
+        const normalizedRaw = normalizeDateStr(rawDate);
+        const diffDays = Math.abs((new Date(computedFromId) - new Date(normalizedRaw)) / 86400000);
+        if (diffDays <= 1) {
+          return computedFromId;
+        }
+        return normalizedRaw;
+      }
+    } catch {}
+  }
+  return normalizeDateStr(rawDate);
+}
+
 function resolveUserKey(memberName, rawBy, users) {
   if (rawBy && users && users[rawBy.toLowerCase()]) {
     return rawBy.toLowerCase();
@@ -108,7 +129,7 @@ function normalizeSheetSale(s, users = null) {
       items = [{ name: 'Service', qty: 1, price: Number(s.total) || 0 }];
     }
   }
-  const dateStr = normalizeDateStr(s.date);
+  const dateStr = resolveSaleDate(s.date, s.id);
   const timeStr = s.time || (s.timestamp ? new Date(s.timestamp).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true }) : '');
   const timestamp = s.timestamp || (s.recordedAt ? new Date(s.recordedAt).toISOString() : '');
 

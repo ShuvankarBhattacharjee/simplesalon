@@ -304,6 +304,30 @@ function normDate(d) {
   return str.slice(0, 10);
 }
 
+function resolveSaleDate(rawDate, saleId) {
+  const idNum = Number(saleId);
+  if (idNum > 1600000000000 && idNum < 2500000000000) {
+    try {
+      const idDate = new Date(idNum);
+      if (!isNaN(idDate.getTime())) {
+        const year = idDate.getFullYear();
+        const month = String(idDate.getMonth() + 1).padStart(2, '0');
+        const day = String(idDate.getDate()).padStart(2, '0');
+        const computedFromId = `${year}-${month}-${day}`;
+        if (!rawDate) return computedFromId;
+        const normalizedRaw = normDate(rawDate);
+        const diffDays = Math.abs((new Date(computedFromId) - new Date(normalizedRaw)) / 86400000);
+        // Correct timezone shift from Google Sheets (within 1 day difference)
+        if (diffDays <= 1) {
+          return computedFromId;
+        }
+        return normalizedRaw;
+      }
+    } catch {}
+  }
+  return normDate(rawDate);
+}
+
 function normSale(s) {
   if (!s) return null;
   let items = s.items;
@@ -316,7 +340,7 @@ function normSale(s) {
       items = [{ name: 'Service', qty: 1, price: Number(s.total) || 0 }];
     }
   }
-  const dateStr = normDate(s.date);
+  const dateStr = resolveSaleDate(s.date, s.id);
   return {
     ...s,
     id: String(s.id),
@@ -972,7 +996,7 @@ function filtered(){
   const range = getSalesDateRange();
   const p = $('sp') ? $('sp').value : '';
   let list = activeSales().filter(s => {
-    const sDate = normDate(s.date);
+    const sDate = resolveSaleDate(s.date, s.id);
     if (q && !(names(s) + s.note).toLowerCase().includes(q)) return false;
     if (range.from && sDate < range.from) return false;
     if (range.to && sDate > range.to) return false;
@@ -1170,9 +1194,9 @@ function stats(){
   const t = today();
   const m = t.slice(0, 7);
   const src = role === 'admin' ? getAllAvailableSales() : (sales && sales.length ? sales : getAllAvailableSales());
-  const todayList = src.filter(s => normDate(s.date) === t);
+  const todayList = src.filter(s => resolveSaleDate(s.date, s.id) === t);
   const monthList = src.filter(s => {
-    const dStr = normDate(s.date);
+    const dStr = resolveSaleDate(s.date, s.id);
     return dStr && dStr.startsWith(m);
   });
   const todayTotal = todayList.reduce((a, s) => a + (Number(s.total) || 0), 0);
