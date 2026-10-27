@@ -299,6 +299,20 @@ async function fetchServices() {
     }
   } catch {}
 }
+function normDate(d) {
+  if (!d) return today();
+  const str = String(d).trim();
+  const m = str.match(/^(\d{4})[-/](\d{1,2})[-/](\d{1,2})/);
+  if (m) {
+    return `${m[1]}-${String(m[2]).padStart(2, '0')}-${String(m[3]).padStart(2, '0')}`;
+  }
+  const m2 = str.match(/^(\d{1,2})[-/](\d{1,2})[-/](\d{4})/);
+  if (m2) {
+    return `${m2[3]}-${String(m2[2]).padStart(2, '0')}-${String(m2[1]).padStart(2, '0')}`;
+  }
+  return str.slice(0, 10);
+}
+
 function normSale(s) {
   if (!s) return null;
   let items = s.items;
@@ -311,6 +325,7 @@ function normSale(s) {
       items = [{ name: 'Service', qty: 1, price: Number(s.total) || 0 }];
     }
   }
+  const dateStr = normDate(s.date);
   return {
     ...s,
     id: String(s.id),
@@ -321,7 +336,7 @@ function normSale(s) {
     calc: Number(s.calc != null ? s.calc : s.total) || 0,
     total: Number(s.total) || 0,
     pay: s.pay || 'Cash',
-    date: s.date || today(),
+    date: dateStr,
     note: s.note || ''
   };
 }
@@ -697,8 +712,11 @@ async function saveSale(){
 
   if (!navigator.onLine) {
     queueOfflineSale(saleObj);
-    sales.unshift(saleObj);
-    if(role==='admin') allSales.unshift({...saleObj,by:user,byName:uname});
+    const normalizedSale = normSale({ ...saleObj, by: user, byName: uname });
+    sales = [normalizedSale, ...sales.filter(s => String(s.id) !== String(normalizedSale.id))];
+    if (role === 'admin') {
+      allSales = [normalizedSale, ...allSales.filter(s => String(s.id) !== String(normalizedSale.id))];
+    }
     stats(); updateNetStatus(); renderSales();
     saveSessionCache();
     showPrompt('💾 Saved to your device — will upload when online', 'offline');
@@ -706,12 +724,16 @@ async function saveSale(){
   }
 
   try{
-    const sale=await api('/api/sales',{method:'POST',body:saleObj});
-    sheetConfirmedIds.add(String(sale.id));
+    const sale = await api('/api/sales', { method: 'POST', body: saleObj });
+    const normalizedSale = normSale({ ...saleObj, ...sale, by: user, byName: uname });
+    sheetConfirmedIds.add(String(normalizedSale.id));
     sheetIdsFetched = true;
     saveCachedConfirmedIds(sheetConfirmedIds);
-    sales.unshift(sale);
-    if(role==='admin')allSales.unshift({...sale,by:user,byName:uname});
+
+    sales = [normalizedSale, ...sales.filter(s => String(s.id) !== String(normalizedSale.id))];
+    if (role === 'admin') {
+      allSales = [normalizedSale, ...allSales.filter(s => String(s.id) !== String(normalizedSale.id))];
+    }
     stats();
     renderSales();
     saveSessionCache();
@@ -720,16 +742,16 @@ async function saveSale(){
     syncPendingSales();
     setTimeout(fetchSheetIds, 1500);
   }catch(e){
-    if (e.isNetwork || !navigator.onLine) {
-      queueOfflineSale(saleObj);
-      sales.unshift(saleObj);
-      if(role==='admin') allSales.unshift({...saleObj,by:user,byName:uname});
-      stats(); updateNetStatus(); renderSales();
-      saveSessionCache();
-      showPrompt('💾 Saved to your device — will upload when online', 'offline');
-    } else {
-      showPrompt('✕ Error: ' + e.message, 'error', 5000);
+    // In any network drop or server delay, safely preserve the sale locally so today's stats never drop
+    queueOfflineSale(saleObj);
+    const normalizedSale = normSale({ ...saleObj, by: user, byName: uname });
+    sales = [normalizedSale, ...sales.filter(s => String(s.id) !== String(normalizedSale.id))];
+    if (role === 'admin') {
+      allSales = [normalizedSale, ...allSales.filter(s => String(s.id) !== String(normalizedSale.id))];
     }
+    stats(); updateNetStatus(); renderSales();
+    saveSessionCache();
+    showPrompt('💾 Saved to your device — will auto-sync to Sheet', 'offline');
   }
 }
 
@@ -901,9 +923,16 @@ function activeSales(){
 async function loadAllSales(){
   try{
     const d = await api('/api/admin/sales');
-    allSales = norm(d.sales);
-    renderSales();
-    stats();
+    if (d && Array.isArray(d.sales)) {
+      const map = new Map();
+      for (const s of norm(d.sales)) map.set(String(s.id), s);
+      for (const s of (allSales || [])) if (s && s.id && !map.has(String(s.id))) map.set(String(s.id), s);
+      for (const s of (sales || [])) if (s && s.id && !map.has(String(s.id))) map.set(String(s.id), s);
+      for (const s of getOfflineQueue()) if (s && s.id) map.set(String(s.id), normSale(s));
+      allSales = Array.from(map.values()).sort((a, b) => String(b.date).localeCompare(String(a.date)) || Number(b.id) - Number(a.id));
+      renderSales();
+      stats();
+    }
   }catch(e){
     console.warn('loadAllSales error:', e.message);
   }
@@ -952,9 +981,10 @@ function filtered(){
   const range = getSalesDateRange();
   const p = $('sp') ? $('sp').value : '';
   let list = activeSales().filter(s => {
+    const sDate = normDate(s.date);
     if (q && !(names(s) + s.note).toLowerCase().includes(q)) return false;
-    if (range.from && s.date < range.from) return false;
-    if (range.to && s.date > range.to) return false;
+    if (range.from && sDate < range.from) return false;
+    if (range.to && sDate > range.to) return false;
     if (p && s.pay !== p) return false;
     return true;
   });
@@ -1206,12 +1236,43 @@ function updateFilterBtn(){
     btn.innerHTML='⚠ Not uploaded only';
   }
 }
+function getAllAvailableSales() {
+  const map = new Map();
+  // 1. Offline queue sales
+  for (const s of getOfflineQueue()) {
+    if (s && s.id != null) {
+      const n = normSale(s);
+      if (n) map.set(String(n.id), n);
+    }
+  }
+  // 2. Local user sales
+  for (const s of (sales || [])) {
+    if (s && s.id != null) {
+      const n = normSale(s);
+      if (n) map.set(String(n.id), n);
+    }
+  }
+  // 3. Admin allSales (if logged in as admin)
+  if (role === 'admin' && Array.isArray(allSales)) {
+    for (const s of allSales) {
+      if (s && s.id != null) {
+        const n = normSale(s);
+        if (n) map.set(String(n.id), n);
+      }
+    }
+  }
+  return Array.from(map.values());
+}
+
 function stats(){
   const t = today();
   const m = t.slice(0, 7);
-  const src = (role === 'admin' && allSales && allSales.length) ? allSales : sales;
-  const todayList = src.filter(s => s.date === t);
-  const monthList = src.filter(s => s.date && String(s.date).startsWith(m));
+  const src = role === 'admin' ? getAllAvailableSales() : (sales && sales.length ? sales : getAllAvailableSales());
+  const todayList = src.filter(s => normDate(s.date) === t);
+  const monthList = src.filter(s => {
+    const dStr = normDate(s.date);
+    return dStr && dStr.startsWith(m);
+  });
   const todayTotal = todayList.reduce((a, s) => a + (Number(s.total) || 0), 0);
   const monthTotal = monthList.reduce((a, s) => a + (Number(s.total) || 0), 0);
 
@@ -2715,37 +2776,51 @@ function renderDash(d){
 }
 
 // ---- Google Sheet Connection Indicator ----
+let consecutiveConnErrors = 0;
 async function checkSheetConn(interactive = false) {
   const dot = $('sheetStatusDot');
   const pill = $('sheetStatusIndicator');
   const txt = $('sheetStatusText');
-  if (dot) dot.className = 'sheet-status-dot syncing';
-  if (txt) txt.textContent = 'Checking…';
-  if (pill) pill.setAttribute('title', 'Checking Google Sheet connection…');
+
+  // Only show checking state if user explicitly clicked indicator
+  if (interactive) {
+    if (dot) dot.className = 'sheet-status-dot syncing';
+    if (txt) txt.textContent = 'Checking…';
+    if (pill) pill.setAttribute('title', 'Checking Google Sheet connection…');
+  }
+
+  if (!navigator.onLine) {
+    if (dot) dot.className = 'sheet-status-dot offline';
+    if (txt) txt.textContent = 'Device Offline';
+    if (pill) pill.setAttribute('title', '⚡ Device is offline (No internet connection)');
+    if (interactive) showPrompt('⚡ Device is offline — connect to internet', 'offline');
+    return null;
+  }
+
   try {
     const st = await api('/api/sync/status');
-    if (st && st.configured && !st.lastError) {
+    consecutiveConnErrors = 0;
+    if (st && st.configured) {
       if (dot) dot.className = 'sheet-status-dot online';
       if (txt) txt.textContent = 'Sheet Connected';
       if (pill) pill.setAttribute('title', '🟢 Google Sheet Connected (Click to re-check)');
       if (interactive) showPrompt('🟢 Google Sheet is active & connected!', 'success');
-    } else if (st && st.configured && st.lastError) {
-      if (dot) dot.className = 'sheet-status-dot offline';
-      if (txt) txt.textContent = 'Sync Issue';
-      if (pill) pill.setAttribute('title', '⚠️ Google Sheet Sync Issue: ' + st.lastError);
-      if (interactive) showPrompt('⚠️ Sheet sync issue: ' + st.lastError, 'warn');
     } else {
       if (dot) dot.className = 'sheet-status-dot offline';
-      if (txt) txt.textContent = 'Not Connected';
-      if (pill) pill.setAttribute('title', '⚠️ Google Sheet Not Connected');
+      if (txt) txt.textContent = 'Not Configured';
+      if (pill) pill.setAttribute('title', '⚠️ Google Sheet Not Configured in config.json');
       if (interactive) showPrompt('⚠️ Google Sheet URL not configured', 'warn');
     }
     return st;
   } catch (e) {
-    if (dot) dot.className = 'sheet-status-dot offline';
-    if (txt) txt.textContent = 'Offline';
-    if (pill) pill.setAttribute('title', '⚠️ Google Sheet Offline: ' + e.message);
-    if (interactive) showPrompt('⚠️ Unable to verify Sheet connection: ' + e.message, 'warn');
+    consecutiveConnErrors++;
+    // Only turn red if multiple consecutive background checks fail or user requested check
+    if (consecutiveConnErrors >= 2 || interactive) {
+      if (dot) dot.className = 'sheet-status-dot offline';
+      if (txt) txt.textContent = 'Connection Issue';
+      if (pill) pill.setAttribute('title', '⚠️ Connection Issue: ' + e.message);
+      if (interactive) showPrompt('⚠️ Unable to verify Sheet connection: ' + e.message, 'warn');
+    }
     return null;
   }
 }
@@ -2956,12 +3031,24 @@ function applyFreshData(d) {
     renderSvc();
   }
   if (d.sales && Array.isArray(d.sales)) {
-    // Preserve local queued sales that haven't synced yet
+    // Preserve local queued sales and recently added entries so they are never lost
     const q = getOfflineQueue();
-    const serverIds = new Set(d.sales.map(s => String(s.id)));
-    const pendingSales = q.filter(s => !serverIds.has(String(s.id)));
-    sales = norm([...pendingSales, ...d.sales]);
-    allSales = norm([...pendingSales, ...d.sales]);
+    const map = new Map();
+    for (const s of norm(d.sales)) map.set(String(s.id), s);
+    for (const s of (sales || [])) {
+      if (s && s.id && !map.has(String(s.id))) map.set(String(s.id), normSale(s));
+    }
+    for (const s of q) {
+      if (s && s.id) map.set(String(s.id), normSale(s));
+    }
+    const merged = Array.from(map.values()).sort((a, b) => String(b.date).localeCompare(String(a.date)) || Number(b.id) - Number(a.id));
+    sales = merged;
+    if (role === 'admin') {
+      const allMap = new Map();
+      for (const s of (allSales || [])) if (s && s.id) allMap.set(String(s.id), normSale(s));
+      for (const s of merged) allMap.set(String(s.id), s);
+      allSales = Array.from(allMap.values()).sort((a, b) => String(b.date).localeCompare(String(a.date)) || Number(b.id) - Number(a.id));
+    }
     renderSales();
     stats();
   }

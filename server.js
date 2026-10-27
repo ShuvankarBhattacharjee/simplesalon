@@ -129,6 +129,24 @@ function normalizeSheetSale(s, users = null) {
   };
 }
 
+function getAllSalesMerged() {
+  const users = db.getUsers();
+  const out = [];
+  const seenIds = new Set();
+  for (const [key, u] of Object.entries(users)) {
+    for (const s of db.getSales(key)) {
+      const idStr = String(s.id);
+      if (!seenIds.has(idStr)) {
+        seenIds.add(idStr);
+        const norm = normalizeSheetSale({ ...s, by: key, byName: (u && u.name) ? u.name : key }, users);
+        if (norm) out.push(norm);
+      }
+    }
+  }
+  out.sort((a, b) => String(b.date).localeCompare(String(a.date)) || Number(b.id) - Number(a.id));
+  return out;
+}
+
 let lastSheetHydration = 0;
 async function hydrateSalesFromSheet(force = false) {
   const now = Date.now();
@@ -248,11 +266,11 @@ app.post('/api/auth/login', async (req, res) => {
     });
   }
   const user = result.user;
-
-  let userSales = db.getSales(v.key);
+  const isAdm = user.role === 'admin' || auth.isAdmin(v.key);
+  let userSales = isAdm ? getAllSalesMerged() : db.getSales(v.key);
   if (userSales.length === 0) {
-    await hydrateSalesFromSheet();
-    userSales = db.getSales(v.key);
+    hydrateSalesFromSheet().catch(() => {});
+    userSales = isAdm ? getAllSalesMerged() : db.getSales(v.key);
   }
 
   const services = await getOrSyncServices();
@@ -305,24 +323,19 @@ app.put('/api/admin/settings', requireAuth, requireAdmin, async (req, res) => {
 
 app.get('/api/bootstrap', requireAuth, async (req, res) => {
   try {
-    try {
-      await Promise.race([
-        hydrateSalesFromSheet(),
-        new Promise((_, reject) => setTimeout(() => reject(new Error('Hydration timeout')), 2500))
-      ]);
-    } catch (e) {
-      console.warn('Hydration skipped on bootstrap:', e.message);
-    }
-    const sales = db.getSales(req.user.username);
+    const isAdm = req.user.role === 'admin' || auth.isAdmin(req.user.username);
+    const sales = isAdm ? getAllSalesMerged() : db.getSales(req.user.username);
     const services = await getOrSyncServices();
     res.json({
       user: req.user.username,
       name: req.user.name,
-      role: req.user.role || (auth.isAdmin(req.user.username) ? 'admin' : 'member'),
+      role: req.user.role || (isAdm ? 'admin' : 'member'),
       services,
       sales,
       shopName: db.getSettings().shopName || 'Simple Salon'
     });
+    // Background sheet sync so response returns to client instantly
+    hydrateSalesFromSheet().catch(() => {});
   } catch (err) {
     console.error('Bootstrap error:', err.message);
     res.status(500).json({ error: 'Failed to load user data' });
@@ -492,24 +505,11 @@ app.delete('/api/admin/users/:user', requireAuth, requireAdmin, (req, res) => {
 });
 
 // ---- admin: all sales ----
-app.get('/api/admin/sales', requireAuth, requireAdmin, async (req, res) => {
-  await hydrateSalesFromSheet();
-  const users = db.getUsers();
-  const out = [];
-  const seenIds = new Set();
-
-  for (const [key, u] of Object.entries(users)) {
-    for (const s of db.getSales(key)) {
-      const idStr = String(s.id);
-      if (!seenIds.has(idStr)) {
-        seenIds.add(idStr);
-        const norm = normalizeSheetSale({ ...s, by: key, byName: u.name }, users);
-        if (norm) out.push(norm);
-      }
-    }
-  }
-  out.sort((a, b) => String(b.date).localeCompare(String(a.date)) || Number(b.id) - Number(a.id));
+app.get('/api/admin/sales', requireAuth, requireAdmin, (req, res) => {
+  const out = getAllSalesMerged();
   res.json({ sales: out });
+  // Non-blocking hydration in background
+  hydrateSalesFromSheet().catch(() => {});
 });
 
 app.delete('/api/admin/sales/:user/:id', requireAuth, requireAdmin, (req, res) => {
@@ -706,7 +706,9 @@ app.post('/api/sales', requireAuth, async (req, res) => {
     date,
     time,
     timestamp,
-    note: String(b.note || '').trim()
+    note: String(b.note || '').trim(),
+    by: req.user.username,
+    byName: req.user.name || req.user.username
   };
   const sales = db.getSales(req.user.username);
   const existing = sales.find(s => s.id === saleId);
@@ -715,7 +717,9 @@ app.post('/api/sales', requireAuth, async (req, res) => {
   }
   sales.unshift(sale);
   db.saveSales(req.user.username, sales);
-  const ok = await gsheet.push({
+
+  // Push to Google Sheet in background without blocking response
+  gsheet.push({
     type: 'sale_created',
     data: {
       id: sale.id,
@@ -732,8 +736,10 @@ app.post('/api/sales', requireAuth, async (req, res) => {
       total: sale.total,
       note: sale.note
     }
-  });
-  if (ok) db.markUploaded([sale.id]);
+  }).then(ok => {
+    if (ok) db.markUploaded([sale.id]);
+  }).catch(() => {});
+
   res.status(201).json(sale);
 });
 
