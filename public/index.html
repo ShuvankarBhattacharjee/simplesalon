@@ -74,24 +74,27 @@
   <div class="wrap hide" id="app">
     <header>
       <div class="brand-row">
-        <div class="brand-title" id="brandTitleBox">
-          <span class="brand-ico">✂️</span>
-          <h1 id="brandTitleHeading"><span id="brandShopName">Simple Salon</span> <span class="pop-color">Sales</span>
-          </h1>
-          <button type="button" class="btn-edit-shop hide" id="btnEditShop" onclick="openEditShopModal()"
-            title="Change Shop Name">✏️</button>
+        <div class="brand-left">
+          <button type="button" class="btn-hamburger" id="btnHamburger" onclick="toggleSidebar()" aria-label="Open navigation sidebar" title="Menu">
+            <span class="ham-bar"></span>
+            <span class="ham-bar"></span>
+            <span class="ham-bar"></span>
+          </button>
+          <div class="brand-title" id="brandTitleBox">
+            <span class="brand-ico">✂️</span>
+            <h1 id="brandTitleHeading"><span id="brandShopName">Simple Salon</span></h1>
+          </div>
         </div>
         <div class="usr">
-          <button class="header-sync-btn" id="btnHeaderSync" onclick="uploadAll()"
-            title="Manually upload all non-synced data to Google Sheet">
-            <span class="h-sync-icon">☁️</span>
-            <span class="h-sync-text">Sync Data</span>
-            <span class="h-sync-badge hide" id="hSyncBadge">0</span>
-          </button>
-          <span class="u-badge"><i class="u-dot"></i><b id="uName"></b></span>
-          <span class="tag hide" id="uRole"></span>
-          <button class="logout-btn" onclick="logout()" title="Log out"><span class="logout-ico">⏻</span> Log
-            out</button>
+          <!-- Green Google Sheet Connected Indicator at Top Right Corner (Dot Only) -->
+          <div class="sheet-status-pill sheet-dot-only" id="sheetStatusIndicator" onclick="checkSheetConn(true)" title="Google Sheet Connected (Click to re-check)">
+            <span class="sheet-status-dot online" id="sheetStatusDot"></span>
+          </div>
+          <!-- Keep hidden user/role elements for backwards JS compatibility -->
+          <span class="hide" id="uName"></span>
+          <span class="hide" id="uRole"></span>
+          <button class="hide" id="btnHeaderSync"></button>
+          <button class="hide" id="btnEditShop"></button>
         </div>
       </div>
       <div class="tabs"><button id="t1" class="on" onclick="tab(1)">Services</button><button id="t2"
@@ -119,61 +122,60 @@
     <!-- SALES -->
     <section id="p2" class="hide">
       <div class="sales-toolbar-card">
-        <div class="sales-date-bar">
-          <!-- 3 Date Filter Buttons: Today (default), Yesterday, Custom -->
-          <div class="s-date-pills">
-            <button type="button" class="s-date-btn on" id="btnSalesToday" onclick="setSalesDateFilter('today')">📅
-              Today</button>
-            <button type="button" class="s-date-btn" id="btnSalesYesterday" onclick="setSalesDateFilter('yesterday')">⏮️
-              Yesterday</button>
-            <button type="button" class="s-date-btn" id="btnSalesCustom" onclick="setSalesDateFilter('custom')">🗓️
-              Custom</button>
-          </div>
-
-          <!-- Custom Date Picker: Appears ONLY when Custom is clicked -->
-          <div id="salesCustomDateBox" class="hide sales-custom-date-box">
-            <input type="date" id="sd" onchange="renderSales()" title="Pick custom date">
-          </div>
-
-          <!-- Two Share Buttons: WhatsApp and Share Anywhere -->
-          <div class="sales-share-actions">
-            <button type="button" class="btn btn-wa-direct" onclick="shareCurrentSalesWhatsApp()"
-              title="Share through WhatsApp with PDF">
-              <span class="wa-ico">💬</span> WhatsApp
-            </button>
-            <button type="button" class="btn btn-share-anywhere" onclick="shareCurrentSalesAnywhere()"
-              title="Share PDF anywhere (WhatsApp, Email, Drive, etc.)">
-              <span class="share-ico">📤</span> Share
-            </button>
-          </div>
+        <!-- Row 1: Today, Yesterday filter buttons -->
+        <div class="sales-filter-row-1">
+          <button type="button" class="s-date-btn on" id="btnSalesToday" onclick="setSalesDateFilter('today')">📅 Today</button>
+          <button type="button" class="s-date-btn" id="btnSalesYesterday" onclick="setSalesDateFilter('yesterday')">⏮️ Yesterday</button>
+          <button type="button" class="s-date-btn" id="btnSalesAll" onclick="setSalesDateFilter('all')">All Dates</button>
         </div>
 
-        <!-- Filter Controls -->
-        <div class="bar sales-filter-subbar">
-          <input id="sq" placeholder="Search service or note…" oninput="renderSales()">
-          <select id="sp" onchange="renderSales()">
-            <option value="">All payments</option>
-            <option>Cash</option>
-            <option>UPI</option>
-            <option>Pending</option>
-            <option>Card</option>
-          </select>
-          <select id="sm" class="hide" onchange="renderSales()" title="Team member">
-            <option value="">Everyone</option>
-          </select>
-          <button class="btn ghost" onclick="clearF()">Clear</button>
-          <button class="btn ghost" onclick="exportCSV()">Export CSV</button>
+        <!-- Row 2: Custom Date Range (From - To) and Payment Mode filter -->
+        <div class="sales-filter-row-2">
+          <div class="filter-col filter-col-range">
+            <span class="filter-col-label">Custom Date Range</span>
+            <div class="range-inputs-group">
+              <input type="date" id="sdFrom" onchange="onSalesDateRangeChange()" title="From Date" aria-label="From Date">
+              <span class="range-arrow">→</span>
+              <input type="date" id="sdTo" onchange="onSalesDateRangeChange()" title="To Date" aria-label="To Date">
+            </div>
+            <input type="hidden" id="sd">
+          </div>
+          <div class="filter-col">
+            <label for="sp" class="filter-col-label">Payment Mode</label>
+            <select id="sp" onchange="renderSales()">
+              <option value="">All Payments</option>
+              <option value="Cash">Cash</option>
+              <option value="UPI">UPI</option>
+              <option value="Pending">Pending</option>
+              <option value="Card">Card</option>
+            </select>
+          </div>
+          <select id="sm" class="hide" onchange="renderSales()"><option value="">Everyone</option></select>
+        </div>
+
+        <!-- Row 3: Share and Export buttons -->
+        <div class="sales-filter-row-3">
+          <button type="button" class="btn btn-wa-direct" onclick="shareCurrentSalesWhatsApp()" title="Share on WhatsApp with PDF">
+            <span class="wa-ico">💬</span> WhatsApp
+          </button>
+          <button type="button" class="btn btn-share-anywhere" onclick="shareCurrentSalesAnywhere()" title="Share sales PDF">
+            <span class="share-ico">📤</span> Share
+          </button>
+          <button type="button" class="btn btn-export-sales" onclick="openExportModal('sales')" title="Export as Excel or CSV">
+            <span class="export-ico">📊</span> Export
+          </button>
         </div>
       </div>
+
+      <!-- Row 4: Upload all non-synced & Refresh -->
       <div class="sales-actions-bar" id="salesActionsBar">
         <button class="btn upload-all-btn" id="btnUploadAll" onclick="uploadAll()"
           title="Upload all non-synced data to Google Sheet">
-          <span class="up-ic">↑</span> Upload all non-synced <span class="up-badge" id="salesUpBadge">0</span>
+          <span class="up-ic">☁️</span> Upload all non-synced <span class="up-badge" id="salesUpBadge">0</span>
         </button>
-        <button class="btn ghost filter-not-uploaded" id="btnNotUploaded" onclick="toggleNotUploaded()">⚠ Not uploaded
-          only</button>
+        <button class="btn ghost filter-not-uploaded" id="btnNotUploaded" onclick="toggleNotUploaded()">⚠ Not uploaded only</button>
         <button class="btn ghost refresh-status-btn" onclick="refreshSheetStatus()"
-          title="Check Google Sheet for upload status">↻ Refresh status</button>
+          title="Check Google Sheet for upload status">↻ Refresh</button>
       </div>
       <div class="list" id="list"></div>
       <p style="margin:14px 4px;color:var(--mute);font-size:13px">Filtered total: <b id="ft"
@@ -182,27 +184,114 @@
 
     <!-- ADMIN DASHBOARD -->
     <section id="p3" class="hide">
-      <div class="bar">
-        <input type="date" id="fFrom" style="width:auto" onchange="loadDash()" title="From date">
-        <span style="align-self:center;color:var(--mute);font-size:13px">to</span>
-        <input type="date" id="fTo" style="width:auto" onchange="loadDash()" title="To date">
-        <select id="fUser" onchange="loadDash()">
-          <option value="">All members</option>
-        </select>
-        <select id="fPay" onchange="loadDash()">
-          <option value="">All payments</option>
-          <option>Cash</option>
-          <option>UPI</option>
-          <option>Pending</option>
-          <option>Card</option>
-        </select>
-        <button class="btn ghost" onclick="clearDashF()">Clear</button>
-        <button class="btn btn-wa-report" onclick="openShareModal()" title="Share sales report on WhatsApp as PDF"><span
-            class="wa-ico">💬</span> WhatsApp PDF</button>
-        <button class="btn" onclick="loadDash()">Refresh</button>
+      <!-- Owner Pending Approvals Alert Banner -->
+      <div id="pendingOwnerBanner" class="pending-owner-banner hide">
+        <div class="pob-content">
+          <span class="pob-icon">🔔</span>
+          <div class="pob-text">
+            <strong id="pobTitle">1 team member waiting for approval</strong>
+            <span id="pobDesc">Review and approve to give them access</span>
+          </div>
+        </div>
+        <button type="button" class="pob-action-btn" onclick="openPendingApprovals()">Review Now</button>
       </div>
 
-      <div class="syncbar" id="syncBar"></div>
+      <div class="dash-filter-container">
+        <!-- Row 1: Today, Yesterday, and Custom Calendar buttons (3 in one row) -->
+        <div class="dash-row-1">
+          <button type="button" class="dash-pill-btn" id="dashBtnToday" onclick="setDashPreset('today')">📅 Today</button>
+          <button type="button" class="dash-pill-btn" id="dashBtnYest" onclick="setDashPreset('yesterday')">⏮️ Yesterday</button>
+          <!-- Custom Calendar Date Range Picker Popover Trigger -->
+          <div class="dash-range-wrap" id="dashRangeWrap">
+            <button type="button" class="dash-pill-btn btn-dash-range" id="btnDashRange" onclick="toggleDashRangePicker()" title="Select custom date range">
+              <span class="dr-ico">🗓️</span>
+              <span id="dashRangeLabel">Custom Range</span>
+              <span class="dr-caret">▾</span>
+            </button>
+            <div id="dashRangePopover" class="dash-range-popover hide">
+              <div class="dr-presets">
+                <button type="button" class="dr-preset-btn" onclick="setDashPreset('today')">Today</button>
+                <button type="button" class="dr-preset-btn" onclick="setDashPreset('yesterday')">Yesterday</button>
+                <button type="button" class="dr-preset-btn" onclick="setDashPreset('7days')">Last 7 Days</button>
+                <button type="button" class="dr-preset-btn on" id="btnPresetThisMonth" onclick="setDashPreset('thisMonth')">This Month</button>
+                <button type="button" class="dr-preset-btn" onclick="setDashPreset('lastMonth')">Last Month</button>
+                <button type="button" class="dr-preset-btn" onclick="setDashPreset('all')">All Time</button>
+              </div>
+              <div class="dr-cal-body">
+                <div class="dr-range-inputs-bar">
+                  <div class="dr-input-field">
+                    <span class="dr-input-lbl">From</span>
+                    <input type="date" id="drInputFrom" onchange="onDashRangeInputChange()" title="Start Date" aria-label="Start Date">
+                  </div>
+                  <span class="dr-input-arrow">→</span>
+                  <div class="dr-input-field">
+                    <span class="dr-input-lbl">To</span>
+                    <input type="date" id="drInputTo" onchange="onDashRangeInputChange()" title="End Date" aria-label="End Date">
+                  </div>
+                </div>
+                <div class="dr-cal-header">
+                  <button type="button" class="dr-nav-btn" onclick="navDashCal(-1)">‹</button>
+                  <span id="drCalMonthLabel" class="dr-cal-title">October 2026</span>
+                  <button type="button" class="dr-nav-btn" onclick="navDashCal(1)">›</button>
+                </div>
+                <div class="dr-cal-weekdays">
+                  <span>Su</span><span>Mo</span><span>Tu</span><span>We</span><span>Th</span><span>Fr</span><span>Sa</span>
+                </div>
+                <div class="dr-cal-grid" id="drCalGrid"></div>
+                <div class="dr-cal-footer">
+                  <span class="dr-hint" id="drCalHint">Click start date, then upto date</span>
+                  <div class="dr-cal-acts">
+                    <button type="button" class="btn ghost btn-sm" onclick="closeDashRangePicker()">Cancel</button>
+                    <button type="button" class="btn btn-sm" onclick="applyDashRangePicker()">Apply Range</button>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <input type="hidden" id="fFrom">
+            <input type="hidden" id="fTo">
+          </div>
+        </div>
+
+        <!-- Row 2: Payment Mode and Team Members (2 in one row) -->
+        <div class="dash-row-2">
+          <div class="dash-field-box">
+            <select id="fPay" onchange="loadDash()" aria-label="Payment Mode">
+              <option value="">All Payments</option>
+              <option value="Cash">Cash</option>
+              <option value="UPI">UPI</option>
+              <option value="Pending">Pending</option>
+              <option value="Card">Card</option>
+            </select>
+          </div>
+
+          <div class="dash-field-box">
+            <select id="fUser" onchange="loadDash()" aria-label="Team Members">
+              <option value="">All Members</option>
+            </select>
+          </div>
+        </div>
+
+        <!-- Row 3: Clear, Share, Export buttons (3 in one row) -->
+        <div class="dash-row-3">
+          <button type="button" class="btn dash-btn-clear" onclick="clearDashF()" title="Reset all dashboard filters">
+            <span class="clear-ico">✕</span> Clear
+          </button>
+          <button type="button" class="btn btn-wa-report dash-btn-share" onclick="openShareModal('dash')" title="Share sales report on WhatsApp as PDF">
+            <span class="wa-ico">💬</span> Share
+          </button>
+          <button type="button" class="btn dash-btn-export" onclick="openExportModal('dash')" title="Export dashboard summary">
+            <span class="export-ico">📊</span> Export
+          </button>
+        </div>
+
+        <!-- Row 4: Refresh and Sync to Sheet buttons -->
+        <div class="dash-row-4">
+          <button type="button" class="btn dash-btn-refresh" onclick="loadDash()" title="Reload dashboard data">
+            <span class="refresh-ico">↻</span> Refresh
+          </button>
+          <button type="button" class="btn dash-btn-sync" onclick="syncBackfill()" title="Sync all data to Google Sheet">☁️ Sync to Sheet</button>
+        </div>
+      </div>
 
       <div class="stats stats4">
         <div class="stat"><small>Total revenue</small><b id="dRev">₹0</b></div>
@@ -281,10 +370,14 @@
         </div>
         <input type="hidden" id="cPay" value="Cash">
       </div>
-      <div class="f" style="margin-top:12px">
-        <label for="cDate">Date</label>
-        <div class="date-input-wrap">
+      <div class="row checkout-datetime-row" style="margin-top:12px">
+        <div class="f">
+          <label for="cDate">Date</label>
           <input id="cDate" type="date" class="checkout-date-input">
+        </div>
+        <div class="f">
+          <label for="cTime">Time</label>
+          <input id="cTime" type="time" class="checkout-time-input">
         </div>
       </div>
       <div class="f"><label>Total amount (₹) — editable</label><input id="cTot" type="number" min="0"
@@ -421,6 +514,140 @@
       </div>
       <div style="margin-top:12px;text-align:center">
         <button class="lnk" onclick="closeM('mShare')" style="color:var(--mute)">Cancel</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- SIDEBAR DRAWER & BACKDROP -->
+  <div id="sidebarBackdrop" class="sidebar-backdrop hide" onclick="closeSidebar()"></div>
+  <aside id="sidebarDrawer" class="sidebar-drawer">
+    <div class="sidebar-header">
+      <div class="sidebar-brand">
+        <span class="brand-ico">✂️</span>
+        <span class="sidebar-shop-name" id="sidebarShopName">Simple Salon</span>
+      </div>
+      <button type="button" class="sidebar-close-btn" onclick="closeSidebar()" aria-label="Close sidebar">✕</button>
+    </div>
+
+    <div class="sidebar-user-card">
+      <div class="sidebar-avatar" id="sidebarAvatar">S</div>
+      <div class="sidebar-user-meta">
+        <div class="sidebar-name" id="sidebarUName">User Name</div>
+        <div class="sidebar-role-badge" id="sidebarRoleBadge">Owner</div>
+        <div class="sidebar-username" id="sidebarUHandle">@username</div>
+      </div>
+    </div>
+
+    <nav class="sidebar-nav">
+      <button type="button" class="sidebar-nav-item" onclick="openProfileModal(); closeSidebar()">
+        <span class="sn-icon">👤</span>
+        <div class="sn-text">
+          <b>Profile</b>
+          <small>View details & account info</small>
+        </div>
+        <span class="sn-arrow">›</span>
+      </button>
+
+      <button type="button" class="sidebar-nav-item hide" id="sidebarBtnEditShop" onclick="openEditShopModal(); closeSidebar()">
+        <span class="sn-icon">🏷️</span>
+        <div class="sn-text">
+          <b>Change Salon Name</b>
+          <small>Edit salon display name</small>
+        </div>
+        <span class="sn-arrow">›</span>
+      </button>
+
+      <button type="button" class="sidebar-nav-item" onclick="uploadAll(); closeSidebar()">
+        <span class="sn-icon">☁️</span>
+        <div class="sn-text">
+          <b>Sync with Google Sheet</b>
+          <small id="sidebarSyncDesc">Check & push offline sales</small>
+        </div>
+        <span class="sn-badge hide" id="sidebarSyncBadge">0</span>
+      </button>
+    </nav>
+
+    <div class="sidebar-bottom">
+      <button type="button" class="btn-sidebar-logout" onclick="logout(); closeSidebar()">
+        <span class="logout-ico">⏻</span> Log out
+      </button>
+      <div class="sidebar-version">Simple Salon Sales Book v2.1</div>
+    </div>
+  </aside>
+
+  <!-- PROFILE MODAL -->
+  <div class="modal" id="mProfile">
+    <div class="box">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+        <h2 style="margin:0">User Profile</h2>
+        <span class="pill okp" id="profRolePill">Owner</span>
+      </div>
+      <p class="sub">Your active account session details</p>
+      
+      <div class="profile-details-card">
+        <div class="prof-row">
+          <span class="prof-label">Full Name</span>
+          <b class="prof-val" id="profName">—</b>
+        </div>
+        <div class="prof-row">
+          <span class="prof-label">Username / Login</span>
+          <span class="prof-val" id="profUser">—</span>
+        </div>
+        <div class="prof-row">
+          <span class="prof-label">Designation</span>
+          <b class="prof-val" id="profDesignation">Owner</b>
+        </div>
+        <div class="prof-row">
+          <span class="prof-label">Salon / Shop Name</span>
+          <span class="prof-val" id="profShopName">Simple Salon</span>
+        </div>
+      </div>
+
+      <div class="acts" style="margin-top:16px">
+        <button type="button" class="btn ghost" onclick="closeM('mProfile')">Close</button>
+        <button type="button" class="btn hide" id="profBtnChangeShop" onclick="closeM('mProfile'); openEditShopModal()">Change Salon Name</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- EXPORT MODAL -->
+  <div class="modal" id="mExport">
+    <div class="box">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
+        <h2 style="margin:0">Export Sales Data</h2>
+        <span class="pill" style="font-size:11px;font-weight:700">📊 Excel & CSV</span>
+      </div>
+      <p class="sub">Download your salon sales records to open in Excel or Google Sheets</p>
+
+      <div class="export-scope-box" style="margin-bottom:14px">
+        <label style="font-size:12px;font-weight:700;color:var(--mute);margin-bottom:6px;display:block">Records to Export:</label>
+        <div class="export-scope-info" id="exportScopeInfo">
+          <b>Filtered List</b> (<span id="exportScopeCount">0</span> entries)
+        </div>
+      </div>
+
+      <div class="export-options-grid">
+        <button type="button" class="export-card-btn" onclick="executeExport('excel')">
+          <div class="ec-icon">📗</div>
+          <div class="ec-info">
+            <b>Export as Excel (.xlsx)</b>
+            <small>Compatible with Microsoft Excel, Sheets & Mobile</small>
+          </div>
+          <span class="ec-action">Download →</span>
+        </button>
+
+        <button type="button" class="export-card-btn" onclick="executeExport('csv')">
+          <div class="ec-icon">📄</div>
+          <div class="ec-info">
+            <b>Export as CSV (.csv)</b>
+            <small>Universal comma-separated spreadsheet format</small>
+          </div>
+          <span class="ec-action">Download →</span>
+        </button>
+      </div>
+
+      <div class="acts" style="margin-top:16px">
+        <button type="button" class="btn ghost" onclick="closeM('mExport')" style="width:100%">Cancel</button>
       </div>
     </div>
   </div>

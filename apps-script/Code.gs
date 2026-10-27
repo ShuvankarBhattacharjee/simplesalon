@@ -212,9 +212,21 @@ function getSheetSales_(ss) {
     const row = values[i];
     const id = row[0];
     if (id !== '' && id != null) {
+      let timeStr = '';
+      let timestamp = '';
+      if (row[8]) {
+        if (row[8] instanceof Date) {
+          timeStr = Utilities.formatDate(row[8], ss.getSpreadsheetTimeZone() || "Asia/Kolkata", "hh:mm a");
+          timestamp = Utilities.formatDate(row[8], "GMT", "yyyy-MM-dd'T'HH:mm:ss'Z'");
+        } else {
+          timeStr = String(row[8]);
+        }
+      }
       list.push({
         id: String(id),
-        date: row[1] ? (row[1] instanceof Date ? row[1].toISOString().slice(0, 10) : String(row[1])) : '',
+        date: row[1] ? (row[1] instanceof Date ? Utilities.formatDate(row[1], ss.getSpreadsheetTimeZone() || "Asia/Kolkata", "yyyy-MM-dd") : String(row[1]).slice(0, 10)) : '',
+        time: timeStr,
+        timestamp: timestamp,
         member: String(row[2] || ''),
         services: String(row[3] || ''),
         pay: String(row[4] || ''),

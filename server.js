@@ -57,10 +57,49 @@ async function getOrSyncServices() {
   return services;
 }
 
-function normalizeSheetSale(s) {
+function normalizeDateStr(d) {
+  if (!d) return new Date().toISOString().slice(0, 10);
+  if (typeof d === 'string') {
+    const m = d.trim().match(/^(\d{4})[-/](\d{1,2})[-/](\d{1,2})/);
+    if (m) {
+      return `${m[1]}-${String(m[2]).padStart(2, '0')}-${String(m[3]).padStart(2, '0')}`;
+    }
+  }
+  try {
+    const dt = new Date(d);
+    if (!isNaN(dt.getTime())) {
+      const year = dt.getFullYear();
+      const month = String(dt.getMonth() + 1).padStart(2, '0');
+      const day = String(dt.getDate()).padStart(2, '0');
+      return `${year}-${month}-${day}`;
+    }
+  } catch {}
+  return String(d).slice(0, 10);
+}
+
+function resolveUserKey(memberName, rawBy, users) {
+  if (rawBy && users && users[rawBy.toLowerCase()]) {
+    return rawBy.toLowerCase();
+  }
+  const cleanMember = String(memberName || '').trim().toLowerCase();
+  if (!cleanMember || cleanMember === 'admin' || cleanMember === 'owner') return 'admin';
+  if (users) {
+    if (users[cleanMember]) return cleanMember;
+    for (const [k, u] of Object.entries(users)) {
+      if (u && u.name && u.name.trim().toLowerCase() === cleanMember) {
+        return k;
+      }
+    }
+  }
+  if (rawBy) return String(rawBy).trim().toLowerCase();
+  return cleanMember.replace(/\s+/g, '_');
+}
+
+function normalizeSheetSale(s, users = null) {
   if (!s || !s.id) return null;
+  const currentUsers = users || db.getUsers();
   const memberName = String(s.member || s.byName || s.by || 'Admin').trim();
-  const username = String(s.by || s.user || (memberName.toLowerCase() === 'admin' ? 'admin' : memberName.toLowerCase())).trim();
+  const username = resolveUserKey(memberName, s.by || s.user, currentUsers);
   let items = s.items;
   if (!items || !Array.isArray(items) || items.length === 0) {
     if (s.services) {
@@ -69,9 +108,15 @@ function normalizeSheetSale(s) {
       items = [{ name: 'Service', qty: 1, price: Number(s.total) || 0 }];
     }
   }
+  const dateStr = normalizeDateStr(s.date);
+  const timeStr = s.time || (s.timestamp ? new Date(s.timestamp).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true }) : '');
+  const timestamp = s.timestamp || (s.recordedAt ? new Date(s.recordedAt).toISOString() : '');
+
   return {
     id: String(s.id),
-    date: s.date || new Date().toISOString().slice(0, 10),
+    date: dateStr,
+    time: timeStr,
+    timestamp: timestamp,
     member: memberName,
     by: username,
     byName: memberName,
@@ -84,22 +129,25 @@ function normalizeSheetSale(s) {
   };
 }
 
-async function hydrateSalesFromSheet() {
+let lastSheetHydration = 0;
+async function hydrateSalesFromSheet(force = false) {
+  const now = Date.now();
+  if (!force && now - lastSheetHydration < 12000) return true;
   try {
     const sheetSales = await gsheet.pullSales();
     if (!Array.isArray(sheetSales) || sheetSales.length === 0) return false;
 
-    const byUser = {};
-    const sheetIds = [];
     const users = db.getUsers();
+    const sheetIds = [];
+    const incomingByUser = {};
 
     for (const raw of sheetSales) {
-      const s = normalizeSheetSale(raw);
+      const s = normalizeSheetSale(raw, users);
       if (!s) continue;
       sheetIds.push(s.id);
       const key = s.by;
-      if (!byUser[key]) byUser[key] = [];
-      byUser[key].push(s);
+      if (!incomingByUser[key]) incomingByUser[key] = [];
+      incomingByUser[key].push(s);
       if (!users[key]) {
         users[key] = {
           name: s.byName,
@@ -111,10 +159,23 @@ async function hydrateSalesFromSheet() {
     }
 
     db.saveUsers(users);
-    for (const [key, list] of Object.entries(byUser)) {
-      db.saveSales(key, list);
+
+    for (const [key, incomingList] of Object.entries(incomingByUser)) {
+      const existing = db.getSales(key);
+      const map = new Map();
+      for (const s of existing) map.set(String(s.id), s);
+      for (const s of incomingList) {
+        if (!map.has(String(s.id))) {
+          map.set(String(s.id), s);
+        }
+      }
+      const merged = Array.from(map.values());
+      merged.sort((a, b) => String(b.date).localeCompare(String(a.date)) || Number(b.id) - Number(a.id));
+      db.saveSales(key, merged);
     }
+
     db.markUploaded(sheetIds);
+    lastSheetHydration = Date.now();
     return true;
   } catch (err) {
     console.error('hydrateSalesFromSheet error:', err.message);
@@ -244,19 +305,15 @@ app.put('/api/admin/settings', requireAuth, requireAdmin, async (req, res) => {
 
 app.get('/api/bootstrap', requireAuth, async (req, res) => {
   try {
-    let sales = db.getSales(req.user.username);
-    if (sales.length === 0) {
-      // Guard against Google Sheets delays with a 4s timeout
-      try {
-        await Promise.race([
-          hydrateSalesFromSheet(),
-          new Promise((_, reject) => setTimeout(() => reject(new Error('Hydration timeout')), 4000))
-        ]);
-      } catch (e) {
-        console.warn('Hydration skipped on bootstrap:', e.message);
-      }
-      sales = db.getSales(req.user.username);
+    try {
+      await Promise.race([
+        hydrateSalesFromSheet(),
+        new Promise((_, reject) => setTimeout(() => reject(new Error('Hydration timeout')), 2500))
+      ]);
+    } catch (e) {
+      console.warn('Hydration skipped on bootstrap:', e.message);
     }
+    const sales = db.getSales(req.user.username);
     const services = await getOrSyncServices();
     res.json({
       user: req.user.username,
@@ -275,108 +332,121 @@ app.get('/api/bootstrap', requireAuth, async (req, res) => {
 // ---- admin dashboard ----
 function daysBetween(from, to) {
   const out = [];
-  const d = new Date(from + 'T00:00:00Z');
-  const end = new Date(to + 'T00:00:00Z');
-  while (d <= end && out.length < 400) {
-    out.push(d.toISOString().slice(0, 10));
-    d.setUTCDate(d.getUTCDate() + 1);
-  }
-  return out;
+  try {
+    if (!from || !to) return [];
+    const fromStr = String(from).slice(0, 10);
+    const toStr = String(to).slice(0, 10);
+    const d = new Date(fromStr + 'T00:00:00Z');
+    const end = new Date(toStr + 'T00:00:00Z');
+    if (isNaN(d.getTime()) || isNaN(end.getTime()) || d > end) {
+      return [fromStr];
+    }
+    while (d <= end && out.length < 400) {
+      out.push(d.toISOString().slice(0, 10));
+      d.setUTCDate(d.getUTCDate() + 1);
+    }
+  } catch {}
+  return out.length ? out : [String(from).slice(0, 10)];
 }
 
 app.get('/api/admin/summary', requireAuth, requireAdmin, async (req, res) => {
-  const from = String(req.query.from || '');
-  const to = String(req.query.to || '');
-  const member = String(req.query.user || '');
-  const pay = String(req.query.pay || '');
-  if (from && !/^\d{4}-\d{2}-\d{2}$/.test(from))
-    return res.status(400).json({ error: 'Invalid from date' });
-  if (to && !/^\d{4}-\d{2}-\d{2}$/.test(to))
-    return res.status(400).json({ error: 'Invalid to date' });
-  if (pay && !PAYMENTS.includes(pay))
-    return res.status(400).json({ error: 'Invalid payment mode' });
+  try {
+    const from = String(req.query.from || '');
+    const to = String(req.query.to || '');
+    const member = String(req.query.user || '');
+    const pay = String(req.query.pay || '');
+    if (from && !/^\d{4}-\d{2}-\d{2}$/.test(from))
+      return res.status(400).json({ error: 'Invalid from date' });
+    if (to && !/^\d{4}-\d{2}-\d{2}$/.test(to))
+      return res.status(400).json({ error: 'Invalid to date' });
+    if (pay && !PAYMENTS.includes(pay))
+      return res.status(400).json({ error: 'Invalid payment mode' });
 
-  let users = db.getUsers();
-  const totalLocalSales = Object.keys(users).reduce((n, k) => n + db.getSales(k).length, 0);
-  if (totalLocalSales === 0) {
-    await hydrateSalesFromSheet();
-    users = db.getUsers();
-  }
+    try { await hydrateSalesFromSheet(); } catch {}
+    let users = db.getUsers() || {};
 
-  if (member && !users[member])
-    return res.status(400).json({ error: 'Unknown member' });
+    const memberOptions = Object.entries(users)
+      .map(([key, u]) => ({ user: key, name: (u && u.name) ? u.name : key }))
+      .sort((a, b) => a.name.localeCompare(b.name));
 
-  const memberOptions = Object.entries(users)
-    .map(([key, u]) => ({ user: key, name: u.name }))
-    .sort((a, b) => a.name.localeCompare(b.name));
+    const match = s =>
+      (!from || s.date >= from) && (!to || s.date <= to) && (!pay || s.pay === pay);
 
-  const match = s =>
-    (!from || s.date >= from) && (!to || s.date <= to) && (!pay || s.pay === pay);
+    const members = [];
+    const trendMap = {};
+    const payMap = Object.fromEntries(PAYMENTS.map(p => [p, { mode: p, total: 0, count: 0 }]));
+    const svcMap = {};
+    let revenue = 0;
+    let count = 0;
 
-  const members = [];
-  const trendMap = {};
-  const payMap = Object.fromEntries(PAYMENTS.map(p => [p, { mode: p, total: 0, count: 0 }]));
-  const svcMap = {};
-  let revenue = 0;
-  let count = 0;
-
-  for (const [key, u] of Object.entries(users)) {
-    if (member && key !== member) continue;
-    const sales = db.getSales(key).filter(match);
-    let mTotal = 0;
-    for (const s of sales) {
-      const t = Number(s.total) || 0;
-      const calc = Number(s.calc) || 0;
-      mTotal += t;
-      revenue += t;
-      count++;
-      trendMap[s.date] = (trendMap[s.date] || 0) + t;
-      if (payMap[s.pay]) {
-        payMap[s.pay].total += t;
-        payMap[s.pay].count++;
+    for (const [key, u] of Object.entries(users)) {
+      if (member && key !== member) continue;
+      const sales = (db.getSales(key) || []).filter(match);
+      let mTotal = 0;
+      for (const s of sales) {
+        const t = Number(s.total) || 0;
+        const calc = Number(s.calc) || 0;
+        mTotal += t;
+        revenue += t;
+        count++;
+        const sDate = String(s.date || '').slice(0, 10);
+        if (sDate) trendMap[sDate] = (trendMap[sDate] || 0) + t;
+        if (payMap[s.pay]) {
+          payMap[s.pay].total += t;
+          payMap[s.pay].count++;
+        }
+        const items = (s.items && Array.isArray(s.items) && s.items.length)
+          ? s.items
+          : (s.services ? String(s.services).split(',').map(name => ({ name: name.trim(), qty: 1, price: 0 })) : []);
+        for (const i of items) {
+          const name = String(i.name || 'Service');
+          const line = (Number(i.price) || 0) * (Number(i.qty) || 1);
+          const share = calc > 0 ? (line / calc) * t : (line > 0 ? line : (items.length ? t / items.length : t));
+          if (!svcMap[name]) svcMap[name] = { name, qty: 0, total: 0 };
+          svcMap[name].qty += Number(i.qty) || 1;
+          svcMap[name].total += share;
+        }
       }
-      const items = (s.items && s.items.length)
-        ? s.items
-        : (s.services ? s.services.split(',').map(name => ({ name: name.trim(), qty: 1, price: 0 })) : []);
-      for (const i of items) {
-        const name = String(i.name || 'Service');
-        const line = (Number(i.price) || 0) * (Number(i.qty) || 1);
-        const share = calc > 0 ? (line / calc) * t : (line > 0 ? line : (items.length ? t / items.length : t));
-        if (!svcMap[name]) svcMap[name] = { name, qty: 0, total: 0 };
-        svcMap[name].qty += Number(i.qty) || 1;
-        svcMap[name].total += share;
-      }
+      members.push({ user: key, name: (u && u.name) ? u.name : key, count: sales.length, total: mTotal });
     }
-    members.push({ user: key, name: u.name, count: sales.length, total: mTotal });
-  }
-  members.sort((a, b) => b.total - a.total);
+    members.sort((a, b) => b.total - a.total);
 
-  const dates = Object.keys(trendMap).sort();
-  let trend = [];
-  if (dates.length) {
-    const days = daysBetween(dates[0], dates[dates.length - 1]);
-    trend = days[days.length - 1] === dates[dates.length - 1]
-      ? days.map(d => ({ date: d, total: trendMap[d] || 0 }))
-      : dates.map(d => ({ date: d, total: trendMap[d] }));
-  }
+    const dates = Object.keys(trendMap).sort();
+    let trend = [];
+    if (dates.length) {
+      const days = daysBetween(dates[0], dates[dates.length - 1]);
+      trend = days.map(d => ({ date: d, total: trendMap[d] || 0 }));
+    }
 
-  res.json({
-    range: { from, to },
-    totals: {
-      revenue,
-      count,
-      avg: count ? Math.round(revenue / count) : 0,
-      activeMembers: members.filter(m => m.count > 0).length
-    },
-    memberOptions,
-    members: members.map(m => ({
-      ...m,
-      share: revenue ? Math.round((m.total / revenue) * 1000) / 10 : 0
-    })),
-    trend,
-    payments: Object.values(payMap).filter(p => p.count > 0),
-    services: Object.values(svcMap).sort((a, b) => b.total - a.total).slice(0, 8)
-  });
+    res.json({
+      range: { from, to },
+      totals: {
+        revenue,
+        count,
+        avg: count ? Math.round(revenue / count) : 0,
+        activeMembers: members.filter(m => m.count > 0).length
+      },
+      memberOptions,
+      members: members.map(m => ({
+        ...m,
+        share: revenue ? Math.round((m.total / revenue) * 1000) / 10 : 0
+      })),
+      trend,
+      payments: Object.values(payMap).filter(p => p.count > 0),
+      services: Object.values(svcMap).sort((a, b) => b.total - a.total).slice(0, 8)
+    });
+  } catch (err) {
+    console.error('Error in /api/admin/summary:', err);
+    res.json({
+      range: { from: req.query.from || '', to: req.query.to || '' },
+      totals: { revenue: 0, count: 0, avg: 0, activeMembers: 0 },
+      memberOptions: [],
+      members: [],
+      trend: [],
+      payments: [],
+      services: []
+    });
+  }
 });
 
 // ---- admin: team accounts ----
@@ -398,10 +468,18 @@ app.post('/api/admin/sync/team', requireAuth, requireAdmin, async (req, res) => 
   }
 });
 
-app.post('/api/admin/users/:user/approve', requireAuth, requireAdmin, (req, res) => {
-  const result = auth.approveUser(req.params.user);
+app.post('/api/admin/users/:user/approve', requireAuth, requireAdmin, async (req, res) => {
+  const result = await auth.approveUser(req.params.user);
   if (result.error) return res.status(400).json({ error: result.error });
   res.json({ ok: true });
+});
+
+app.get('/api/admin/notifications', requireAuth, requireAdmin, (req, res) => {
+  const users = db.getUsers();
+  const pendingUsers = Object.entries(users)
+    .filter(([_, u]) => u && (u.status === 'deactivated' || u.status === 'pending'))
+    .map(([key, u]) => ({ user: key, name: u.name, created: u.created || '' }));
+  res.json({ pendingUsers, count: pendingUsers.length });
 });
 
 app.delete('/api/admin/users/:user', requireAuth, requireAdmin, (req, res) => {
@@ -415,19 +493,19 @@ app.delete('/api/admin/users/:user', requireAuth, requireAdmin, (req, res) => {
 
 // ---- admin: all sales ----
 app.get('/api/admin/sales', requireAuth, requireAdmin, async (req, res) => {
-  let users = db.getUsers();
-  const totalLocalSales = Object.keys(users).reduce((n, k) => n + db.getSales(k).length, 0);
-
-  if (totalLocalSales === 0) {
-    await hydrateSalesFromSheet();
-    users = db.getUsers();
-  }
-
+  await hydrateSalesFromSheet();
+  const users = db.getUsers();
   const out = [];
+  const seenIds = new Set();
+
   for (const [key, u] of Object.entries(users)) {
     for (const s of db.getSales(key)) {
-      const norm = normalizeSheetSale({ ...s, by: key, byName: u.name });
-      if (norm) out.push(norm);
+      const idStr = String(s.id);
+      if (!seenIds.has(idStr)) {
+        seenIds.add(idStr);
+        const norm = normalizeSheetSale({ ...s, by: key, byName: u.name }, users);
+        if (norm) out.push(norm);
+      }
     }
   }
   out.sort((a, b) => String(b.date).localeCompare(String(a.date)) || Number(b.id) - Number(a.id));
@@ -448,7 +526,7 @@ app.delete('/api/admin/sales/:user/:id', requireAuth, requireAdmin, (req, res) =
 });
 
 // ---- google sheet sync ----
-app.get('/api/sync/status', requireAuth, requireAdmin, (req, res) => {
+app.get('/api/sync/status', requireAuth, (req, res) => {
   res.json(gsheet.status());
 });
 
@@ -609,6 +687,10 @@ app.post('/api/sales', requireAuth, async (req, res) => {
   if (!DATE_RE.test(date))
     return res.status(400).json({ error: 'Invalid date' });
 
+  const now = new Date();
+  const time = b.time || now.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true });
+  const timestamp = b.timestamp || now.toISOString();
+
   const saleId = b.id ? Number(b.id) : Date.now();
   const sale = {
     id: saleId,
@@ -622,6 +704,8 @@ app.post('/api/sales', requireAuth, async (req, res) => {
     total,
     pay: b.pay,
     date,
+    time,
+    timestamp,
     note: String(b.note || '').trim()
   };
   const sales = db.getSales(req.user.username);
@@ -636,6 +720,8 @@ app.post('/api/sales', requireAuth, async (req, res) => {
     data: {
       id: sale.id,
       date: sale.date,
+      time: sale.time,
+      timestamp: sale.timestamp,
       member: req.user.name,
       by: req.user.username,
       services: sale.items
@@ -659,6 +745,9 @@ app.post('/api/sales/sync', requireAuth, async (req, res) => {
   const sales = db.getSales(req.user.username);
   let synced = 0;
   const syncedIds = [];
+  const now = new Date();
+  const defaultTime = now.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true });
+  const defaultTimestamp = now.toISOString();
 
   for (const b of incoming) {
     const total = Number(b.total);
@@ -678,7 +767,9 @@ app.post('/api/sales/sync', requireAuth, async (req, res) => {
       calc: Number.isFinite(calc) ? calc : total,
       total,
       pay: PAYMENTS.includes(b.pay) ? b.pay : 'Cash',
-      date: DATE_RE.test(b.date) ? b.date : new Date().toISOString().slice(0, 10),
+      date: DATE_RE.test(b.date) ? b.date : now.toISOString().slice(0, 10),
+      time: b.time || defaultTime,
+      timestamp: b.timestamp || defaultTimestamp,
       note: String(b.note || '').trim()
     };
 
@@ -691,7 +782,10 @@ app.post('/api/sales/sync', requireAuth, async (req, res) => {
       data: {
         id: sale.id,
         date: sale.date,
+        time: sale.time,
+        timestamp: sale.timestamp,
         member: req.user.name,
+        by: req.user.username,
         services: sale.items
           .map(i => i.name + (i.qty > 1 ? ' ×' + i.qty : ''))
           .join(', '),
@@ -778,14 +872,15 @@ app.post('/api/sales/:id/upload', requireAuth, async (req, res) => {
     type: 'sale_created',
     data: {
       id: sale.id,
-      date: sale.date,
+      date: normalizeDateStr(sale.date),
       member: memberName,
+      by: sale.by || req.user.username,
       services: (sale.items || [])
         .map(i => i.name + (i.qty > 1 ? ' ×' + i.qty : ''))
         .join(', '),
       pay: sale.pay,
-      calc: sale.calc,
-      total: sale.total,
+      calc: Number(sale.calc) || 0,
+      total: Number(sale.total) || 0,
       note: sale.note || ''
     }
   });
@@ -804,14 +899,14 @@ app.post('/api/sales/upload-all', requireAuth, async (req, res) => {
     if (isAdmin) {
       for (const [key, u] of Object.entries(users)) {
         for (const s of db.getSales(key)) {
-          salesToInspect.push({ sale: s, memberName: u.name });
+          salesToInspect.push({ sale: s, memberName: u.name, userKey: key });
         }
       }
     } else {
       const mySales = db.getSales(req.user.username);
       const myName = req.user.name || req.user.username;
       for (const s of mySales) {
-        salesToInspect.push({ sale: s, memberName: myName });
+        salesToInspect.push({ sale: s, memberName: myName, userKey: req.user.username });
       }
     }
 
@@ -834,14 +929,15 @@ app.post('/api/sales/upload-all', requireAuth, async (req, res) => {
           type: 'sale_created',
           data: {
             id: s.id,
-            date: s.date,
+            date: normalizeDateStr(s.date),
             member: item.memberName,
+            by: s.by || item.userKey || req.user.username,
             services: (s.items || [])
               .map(i => i.name + (i.qty > 1 ? ' ×' + i.qty : ''))
               .join(', '),
             pay: s.pay,
-            calc: s.calc,
-            total: s.total,
+            calc: Number(s.calc) || 0,
+            total: Number(s.total) || 0,
             note: s.note || ''
           }
         });

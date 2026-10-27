@@ -336,8 +336,12 @@ function applyShopName(name) {
   document.title = `${shopName} - Sales Book`;
   const brandEl = $('brandShopName');
   if (brandEl) brandEl.textContent = shopName;
+  const sideShop = $('sidebarShopName');
+  if (sideShop) sideShop.textContent = shopName;
   const editBtn = $('btnEditShop');
   if (editBtn) editBtn.classList.toggle('hide', role !== 'admin');
+  const sideEditBtn = $('sidebarBtnEditShop');
+  if (sideEditBtn) sideEditBtn.classList.toggle('hide', role !== 'admin');
 }
 
 function openEditShopModal() {
@@ -385,6 +389,71 @@ async function saveShopName() {
       btn.textContent = 'Save Shop Name';
     }
   }
+}
+
+// ---- Sidebar & Profile Modal ----
+function toggleSidebar() {
+  const d = $('sidebarDrawer');
+  if (!d) return;
+  if (d.classList.contains('open')) {
+    closeSidebar();
+  } else {
+    openSidebar();
+  }
+}
+
+function openSidebar() {
+  const d = $('sidebarDrawer');
+  const b = $('sidebarBackdrop');
+  updateSidebarInfo();
+  if (d) d.classList.add('open');
+  if (b) b.classList.remove('hide');
+}
+
+function closeSidebar() {
+  const d = $('sidebarDrawer');
+  const b = $('sidebarBackdrop');
+  if (d) d.classList.remove('open');
+  if (b) b.classList.add('hide');
+}
+
+function updateSidebarInfo() {
+  const displayName = uname || user || 'User';
+  if ($('sidebarUName')) $('sidebarUName').textContent = displayName;
+  if ($('sidebarUHandle')) $('sidebarUHandle').textContent = `@${user || 'user'}`;
+  if ($('sidebarShopName')) $('sidebarShopName').textContent = shopName || 'Simple Salon';
+  const roleName = role === 'admin' ? 'Owner' : 'Team';
+  if ($('sidebarRoleBadge')) $('sidebarRoleBadge').textContent = roleName;
+  if ($('sidebarAvatar')) {
+    const initial = (displayName.charAt(0) || 'S').toUpperCase();
+    $('sidebarAvatar').textContent = initial;
+  }
+  const editShopBtn = $('sidebarBtnEditShop');
+  if (editShopBtn) editShopBtn.classList.toggle('hide', role !== 'admin');
+
+  const pending = typeof countTotalPending === 'function' ? countTotalPending() : 0;
+  const badge = $('sidebarSyncBadge');
+  if (badge) {
+    badge.textContent = pending;
+    badge.classList.toggle('hide', pending === 0);
+  }
+  const desc = $('sidebarSyncDesc');
+  if (desc) {
+    desc.textContent = pending > 0 ? `${pending} non-synced entry(s)` : 'All sales synced with Sheet';
+  }
+}
+
+function openProfileModal() {
+  const displayName = uname || user || 'User';
+  if ($('profName')) $('profName').textContent = displayName;
+  if ($('profUser')) $('profUser').textContent = user || '—';
+  const designation = role === 'admin' ? 'Owner / Administrator' : 'Team Member';
+  if ($('profDesignation')) $('profDesignation').textContent = designation;
+  if ($('profRolePill')) $('profRolePill').textContent = role === 'admin' ? 'Owner' : 'Team';
+  if ($('profShopName')) $('profShopName').textContent = shopName || 'Simple Salon';
+  const changeShopBtn = $('profBtnChangeShop');
+  if (changeShopBtn) changeShopBtn.classList.toggle('hide', role !== 'admin');
+  $('mProfile').classList.add('show');
 }
 const $=id=>document.getElementById(id);
 const inr=n=>'₹'+Number(n||0).toLocaleString('en-IN');
@@ -492,11 +561,10 @@ function renderSvc(){
   const q=$('q').value.toLowerCase();
   const list=all().filter(s=>(cat==='All'||s.cat===cat)&&s.name.toLowerCase().includes(q));
   $('grid').innerHTML=list.map(s=>`
-    <div class="svc ${cart[s.id]?'sel':''}" data-id="${s.id}" onclick="onSvcClick(event, '${s.id}')" title="${role==='admin'?'Tap to add • Hold to edit':'Tap to add'}">
+    <div class="svc ${cart[s.id]?'sel':''}" data-id="${s.id}" onclick="onSvcClick(event, '${s.id}')" title="${role==='admin'?'Tap to add (or edit)':'Tap to add'}">
       ${cart[s.id]?`<span class="badge">${cart[s.id]}</span>`:''}
-      ${role==='admin'?`<span class="x" onclick="event.stopPropagation();delSvc('${s.id}')" title="Delete service">✕</span>`:''}
+      ${role==='admin'?`<span class="x" onclick="event.stopPropagation();delSvc('${s.id}')" title="Delete service">✕</span><span class="x" style="right:28px" onclick="event.stopPropagation();openEditSvc('${s.id}')" title="Edit service">✏️</span>`:''}
       <div class="ic">${s.ic||'⭐'}</div><h3>${esc(s.name)}</h3><p>${esc(s.cat)}</p><div class="pr">${inr(s.price)}</div>
-      ${role==='admin'?'<span class="svc-hold-hint">hold to edit</span>':''}
     </div>`).join('')+`<div class="svc add" onclick="openSvc()"><div style="font-size:22px;line-height:1">＋</div><p>Add</p></div>`;
   initServiceHoldGestures();
 }
@@ -528,7 +596,13 @@ function openCheckout(){
   const ids = Object.keys(cart);
   if (!ids.length) return;
   edited=false;
+  const now = new Date();
   $('cDate').value=today();
+  if ($('cTime')) {
+    const hh = String(now.getHours()).padStart(2, '0');
+    const mm = String(now.getMinutes()).padStart(2, '0');
+    $('cTime').value = `${hh}:${mm}`;
+  }
   $('cNote').value='';
   setPayMode('Cash');
   ckRender();
@@ -584,6 +658,20 @@ async function saveSale(){
   const total=+$('cTot').value;
   if($('cTot').value===''||total<0)return alert('Enter a valid total');
   const items=Object.entries(cart).map(([id,q])=>{const s=all().find(x=>x.id===id);return{name:s.name,cat:s.cat,price:s.price,qty:q}});
+  const now = new Date();
+  let time = '';
+  if ($('cTime') && $('cTime').value) {
+    const parts = $('cTime').value.split(':');
+    if (parts.length >= 2) {
+      const d = new Date();
+      d.setHours(Number(parts[0]), Number(parts[1]), 0);
+      time = d.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true });
+    }
+  }
+  if (!time) {
+    time = now.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true });
+  }
+  const timestamp = now.toISOString();
   const saleObj = {
     id: Date.now(),
     items,
@@ -591,6 +679,8 @@ async function saveSale(){
     total,
     pay: $('cPay').value,
     date: $('cDate').value||today(),
+    time,
+    timestamp,
     note: $('cNote').value.trim()
   };
 
@@ -778,42 +868,57 @@ async function loadAllSales(){
     console.warn('loadAllSales error:', e.message);
   }
 }
-function getActiveSalesFilterDate() {
-  if (salesDateFilter === 'today') return today();
-  if (salesDateFilter === 'yesterday') return getYesterday();
-  if (salesDateFilter === 'custom') return $('sd') ? $('sd').value : '';
-  return '';
+function getSalesDateRange() {
+  if (salesDateFilter === 'today') return { from: today(), to: today() };
+  if (salesDateFilter === 'yesterday') return { from: getYesterday(), to: getYesterday() };
+  if (salesDateFilter === 'all') return { from: '', to: '' };
+
+  const from = $('sdFrom') ? $('sdFrom').value : ($('sd') ? $('sd').value : '');
+  const to = $('sdTo') ? $('sdTo').value : ($('sd') ? $('sd').value : '');
+  return { from, to };
+}
+
+function onSalesDateRangeChange() {
+  const range = getSalesDateRange();
+  if (range.from || range.to) {
+    salesDateFilter = 'range';
+    if ($('btnSalesToday')) $('btnSalesToday').classList.remove('on');
+    if ($('btnSalesYesterday')) $('btnSalesYesterday').classList.remove('on');
+    if ($('btnSalesAll')) $('btnSalesAll').classList.remove('on');
+  }
+  renderSales();
 }
 
 function setSalesDateFilter(mode) {
   salesDateFilter = mode;
   const btnToday = $('btnSalesToday');
   const btnYesterday = $('btnSalesYesterday');
-  const btnCustom = $('btnSalesCustom');
-  const customBox = $('salesCustomDateBox');
+  const btnAll = $('btnSalesAll');
 
   if (btnToday) btnToday.classList.toggle('on', mode === 'today');
   if (btnYesterday) btnYesterday.classList.toggle('on', mode === 'yesterday');
-  if (btnCustom) btnCustom.classList.toggle('on', mode === 'custom');
+  if (btnAll) btnAll.classList.toggle('on', mode === 'all');
 
-  if (customBox) {
-    if (mode === 'custom') {
-      customBox.classList.remove('hide');
-      if ($('sd') && !$('sd').value) {
-        $('sd').value = today();
-      }
-    } else {
-      customBox.classList.add('hide');
-    }
+  if (mode === 'today' || mode === 'yesterday' || mode === 'all') {
+    if ($('sdFrom')) $('sdFrom').value = '';
+    if ($('sdTo')) $('sdTo').value = '';
+    if ($('sd')) $('sd').value = '';
   }
   renderSales();
 }
 
 function filtered(){
-  const q=$('sq').value.toLowerCase(),d=getActiveSalesFilterDate(),p=$('sp').value;
-  let list = activeSales().filter(s=>(!q||(names(s)+s.note).toLowerCase().includes(q))&&(!d||s.date===d)&&(!p||s.pay===p));
+  const q = $('sq') ? $('sq').value.toLowerCase() : '';
+  const range = getSalesDateRange();
+  const p = $('sp') ? $('sp').value : '';
+  let list = activeSales().filter(s => {
+    if (q && !(names(s) + s.note).toLowerCase().includes(q)) return false;
+    if (range.from && s.date < range.from) return false;
+    if (range.to && s.date > range.to) return false;
+    if (p && s.pay !== p) return false;
+    return true;
+  });
   if (showOnlyNotUploaded) {
-    // Include: items in offline queue, items not confirmed in sheet, AND unknowns (not yet checked)
     list = list.filter(s => {
       const st = getUploadStatus(s.id);
       return st === 'not-uploaded' || st === 'unknown';
@@ -824,6 +929,27 @@ function filtered(){
 const names = s => (s && s.items && Array.isArray(s.items) && s.items.length)
   ? s.items.map(i => (i.name || 'Service') + (i.qty > 1 ? ' ×' + i.qty : '')).join(', ')
   : (s?.services || 'Service');
+
+function getSaleTime(s) {
+  if (s && s.time && String(s.time).trim()) return String(s.time).trim();
+  if (s && s.timestamp) {
+    try {
+      const d = new Date(s.timestamp);
+      if (!isNaN(d.getTime())) {
+        return d.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true });
+      }
+    } catch {}
+  }
+  if (s && s.id && Number(s.id) > 1600000000000) {
+    try {
+      const d = new Date(Number(s.id));
+      if (!isNaN(d.getTime())) {
+        return d.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true });
+      }
+    } catch {}
+  }
+  return '';
+}
 
 function getUploadStatus(saleId) {
   if (isInQueue(saleId)) return 'not-uploaded';
@@ -851,11 +977,12 @@ function renderSales(){
     } else if (status === 'not-uploaded') {
       statusBtn = `<button class="upload-tag not-uploaded" title="Not found in Google Sheet — click to upload" onclick="uploadSingle(${s.id})">↑ Not Uploaded</button>`;
     } else {
-      // unknown = sheet not yet checked. Show upload button so user can act immediately
       statusBtn = `<button class="upload-tag not-uploaded" title="Upload status unknown — click to upload to Google Sheet" onclick="uploadSingle(${s.id})">↑ Upload to Sheet</button>`;
     }
+    const timeVal = getSaleTime(s);
+    const timeTag = timeVal ? ` · <span class="sale-dt-tag">⏰ ${esc(timeVal)}</span>` : '';
     return `<div class="item" id="sale-${s.id}"><div><b>${esc(names(s))}</b>
-      <small>${s.date} · <span class="${s.pay==='Pending'?'pill warn':''}">${s.pay}</span>${role==='admin'&&s.byName?' · '+esc(s.byName):''}${s.note?' · '+esc(s.note):''}${s.total!==s.calc?' · adjusted from '+inr(s.calc):''}</small>
+      <small><span class="sale-dt-date">📅 ${s.date}</span>${timeTag} · <span class="${s.pay==='Pending'?'pill warn':''}">${s.pay}</span>${role==='admin'&&s.byName?' · '+esc(s.byName):''}${s.note?' · '+esc(s.note):''}${s.total!==s.calc?' · adjusted from '+inr(s.calc):''}</small>
       <div class="sale-tags">
         ${statusBtn}
         <button type="button" class="sale-invoice-btn wa" onclick="shareSingleSaleWhatsApp(${s.id})" title="Share this sale Invoice on WhatsApp">
@@ -1040,24 +1167,158 @@ function updateFilterBtn(){
   }
 }
 function stats(){
-  const t=today(),m=t.slice(0,7);
+  const t = today();
+  const m = t.slice(0, 7);
   const src = (role === 'admin' && allSales && allSales.length) ? allSales : sales;
-  $('sToday').textContent=inr(src.filter(s=>s.date===t).reduce((a,s)=>a+s.total,0));
-  $('sMonth').textContent=inr(src.filter(s=>s.date.startsWith(m)).reduce((a,s)=>a+s.total,0));
-  $('sCount').textContent=src.filter(s=>s.date===t).length;
+  const todayList = src.filter(s => s.date === t);
+  const monthList = src.filter(s => s.date && String(s.date).startsWith(m));
+  const todayTotal = todayList.reduce((a, s) => a + (Number(s.total) || 0), 0);
+  const monthTotal = monthList.reduce((a, s) => a + (Number(s.total) || 0), 0);
+
+  if ($('sToday')) $('sToday').textContent = inr(todayTotal);
+  if ($('sMonth')) $('sMonth').textContent = inr(monthTotal);
+  if ($('sCount')) $('sCount').textContent = todayList.length;
+}
+
+let exportSource = 'sales';
+
+function getExportList() {
+  if (exportSource === 'dash') {
+    const from = $('fFrom')?.value || '';
+    const to = $('fTo')?.value || '';
+    const u = $('fUser')?.value || '';
+    const p = $('fPay')?.value || '';
+    const src = (role === 'admin' && allSales && allSales.length) ? allSales : sales;
+    return src.filter(s => {
+      if (from && s.date < from) return false;
+      if (to && s.date > to) return false;
+      if (u && s.by !== u) return false;
+      if (p && s.pay !== p) return false;
+      return true;
+    });
+  }
+  return filtered();
+}
+
+function openExportModal(source = 'sales') {
+  exportSource = source;
+  const list = getExportList();
+  const countEl = $('exportScopeCount');
+  if (countEl) countEl.textContent = list.length;
+  $('mExport').classList.add('show');
+}
+
+function executeExport(type) {
+  const list = getExportList();
+  if (!list.length) {
+    alert('No sales to export in the current view.');
+    return;
+  }
+  const adminView = role === 'admin';
+  const safeName = (shopName || 'Simple_Salon').replace(/[^a-zA-Z0-9_-]/g, '_');
+
+  if (type === 'csv') {
+    const headers = adminView
+      ? ['Date', 'Time', 'Team Member', 'Services', 'Payment Mode', 'Calculated (INR)', 'Total Amount (INR)', 'Notes', 'Sync Status']
+      : ['Date', 'Time', 'Services', 'Payment Mode', 'Calculated (INR)', 'Total Amount (INR)', 'Notes', 'Sync Status'];
+
+    const rows = list.map(s => {
+      const status = getUploadStatus(s.id) === 'uploaded' ? 'Uploaded to Sheet' : 'Pending Upload';
+      return adminView
+        ? [s.date, s.time || '', s.byName || s.by || '', names(s), s.pay, Number(s.calc) || 0, Number(s.total) || 0, s.note || '', status]
+        : [s.date, s.time || '', names(s), s.pay, Number(s.calc) || 0, Number(s.total) || 0, s.note || '', status];
+    });
+
+    const csvContent = '\uFEFF' + [headers, ...rows]
+      .map(row => row.map(cell => '"' + String(cell ?? '').replace(/"/g, '""') + '"').join(','))
+      .join('\r\n');
+
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = `${safeName}_Sales_${today()}.csv`;
+    a.click();
+    closeM('mExport');
+    showPrompt('✓ Sales exported as CSV successfully!', 'success');
+  } else {
+    // Excel XML Spreadsheet format
+    const headers = adminView
+      ? ['Date', 'Time', 'Team Member', 'Services', 'Payment Mode', 'Calculated (INR)', 'Total Amount (INR)', 'Notes', 'Sync Status']
+      : ['Date', 'Time', 'Services', 'Payment Mode', 'Calculated (INR)', 'Total Amount (INR)', 'Notes', 'Sync Status'];
+
+    let xml = `<?xml version="1.0"?>
+<?mso-application progid="Excel.Sheet"?>
+<Workbook xmlns="urn:schemas-microsoft-com:office:spreadsheet"
+ xmlns:o="urn:schemas-microsoft-com:office:office"
+ xmlns:x="urn:schemas-microsoft-com:office:excel"
+ xmlns:ss="urn:schemas-microsoft-com:office:spreadsheet"
+ xmlns:html="http://www.w3.org/TR/REC-html40">
+ <Styles>
+  <Style ss:ID="Header">
+   <Font ss:Bold="1" ss:Color="#FFFFFF"/>
+   <Interior ss:Color="#1C1C1A" ss:Pattern="Solid"/>
+   <Alignment ss:Horizontal="Center" ss:Vertical="Center"/>
+  </Style>
+  <Style ss:ID="Currency">
+   <NumberFormat ss:Format="₹#,##0"/>
+   <Alignment ss:Horizontal="Right"/>
+  </Style>
+  <Style ss:ID="Normal">
+   <Alignment ss:Vertical="Center"/>
+  </Style>
+ </Styles>
+ <Worksheet ss:Name="Sales Records">
+  <Table>
+   <Row ss:StyleID="Header">
+    ${headers.map(h => `<Cell><Data ss:Type="String">${esc(h)}</Data></Cell>`).join('')}
+   </Row>`;
+
+    list.forEach(s => {
+      const status = getUploadStatus(s.id) === 'uploaded' ? 'Uploaded' : 'Pending';
+      if (adminView) {
+        xml += `
+   <Row ss:StyleID="Normal">
+    <Cell><Data ss:Type="String">${esc(s.date)}</Data></Cell>
+    <Cell><Data ss:Type="String">${esc(s.time || '')}</Data></Cell>
+    <Cell><Data ss:Type="String">${esc(s.byName || s.by || '')}</Data></Cell>
+    <Cell><Data ss:Type="String">${esc(names(s))}</Data></Cell>
+    <Cell><Data ss:Type="String">${esc(s.pay)}</Data></Cell>
+    <Cell ss:StyleID="Currency"><Data ss:Type="Number">${Number(s.calc) || 0}</Data></Cell>
+    <Cell ss:StyleID="Currency"><Data ss:Type="Number">${Number(s.total) || 0}</Data></Cell>
+    <Cell><Data ss:Type="String">${esc(s.note || '')}</Data></Cell>
+    <Cell><Data ss:Type="String">${esc(status)}</Data></Cell>
+   </Row>`;
+      } else {
+        xml += `
+   <Row ss:StyleID="Normal">
+    <Cell><Data ss:Type="String">${esc(s.date)}</Data></Cell>
+    <Cell><Data ss:Type="String">${esc(s.time || '')}</Data></Cell>
+    <Cell><Data ss:Type="String">${esc(names(s))}</Data></Cell>
+    <Cell><Data ss:Type="String">${esc(s.pay)}</Data></Cell>
+    <Cell ss:StyleID="Currency"><Data ss:Type="Number">${Number(s.calc) || 0}</Data></Cell>
+    <Cell ss:StyleID="Currency"><Data ss:Type="Number">${Number(s.total) || 0}</Data></Cell>
+    <Cell><Data ss:Type="String">${esc(s.note || '')}</Data></Cell>
+    <Cell><Data ss:Type="String">${esc(status)}</Data></Cell>
+   </Row>`;
+      }
+    });
+
+    xml += `
+  </Table>
+ </Worksheet>
+</Workbook>`;
+
+    const blob = new Blob([xml], { type: 'application/vnd.ms-excel;charset=utf-8' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = `${safeName}_Sales_${today()}.xls`;
+    a.click();
+    closeM('mExport');
+    showPrompt('✓ Sales exported as Excel spreadsheet successfully!', 'success');
+  }
 }
 function exportCSV(){
-  const adminView=role==='admin';
-  const rows=adminView
-    ?[['Date','Team','Services','Calculated','Total','Payment','Notes'],
-      ...filtered().map(s=>[s.date,s.byName||s.by||'',names(s),s.calc,s.total,s.pay,s.note])]
-    :[['Date','Services','Calculated','Total','Payment','Notes'],
-      ...filtered().map(s=>[s.date,names(s),s.calc,s.total,s.pay,s.note])];
-  const csv=rows.map(r=>r.map(c=>'"'+String(c).replace(/"/g,'""')+'"').join(',')).join('\n');
-  const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([csv],{type:'text/csv'}));
-  const safeName = (shopName || 'Simple_Salon').replace(/[^a-zA-Z0-9_-]/g, '_');
-  a.download=`${safeName}_sales_${user}_${today()}.csv`;
-  a.click();
+  executeExport('csv');
 }
 
 // ---- WhatsApp & PDF Sales Report ----
@@ -1110,19 +1371,32 @@ function selectPeriod(period) {
   updateSharePreview();
 }
 
-function openShareModal() {
+let shareSource = 'sales';
+
+function openShareModal(source = 'sales') {
+  shareSource = source;
   const t = today();
-  if ($('shareFrom')) $('shareFrom').value = t;
-  if ($('shareTo')) $('shareTo').value = t;
-  selectPeriod('today');
+  if (source === 'dash' && $('fFrom') && $('fFrom').value) {
+    if ($('shareFrom')) $('shareFrom').value = $('fFrom').value;
+    if ($('shareTo')) $('shareTo').value = $('fTo').value || $('fFrom').value;
+    selectPeriod('custom');
+  } else {
+    if ($('shareFrom')) $('shareFrom').value = t;
+    if ($('shareTo')) $('shareTo').value = t;
+    selectPeriod('today');
+  }
   $('mShare').classList.add('show');
 }
 
 function getReportSales() {
   const { from, to } = getSelectedShareRange();
   const src = (role === 'admin' && allSales && allSales.length) ? allSales : sales;
-  const memberFilter = ($('sm') && $('sm').value) ? $('sm').value : '';
+  const memberFilter = (shareSource === 'dash' && $('fUser')?.value)
+    ? $('fUser').value
+    : (($('sm') && $('sm').value) ? $('sm').value : '');
+  const payFilter = (shareSource === 'dash' && $('fPay')?.value) ? $('fPay').value : '';
   let list = (role === 'admin' && memberFilter) ? src.filter(s => s.by === memberFilter) : src;
+  if (payFilter) list = list.filter(s => s.pay === payFilter);
   return list.filter(s => s.date >= from && s.date <= to);
 }
 
@@ -1341,7 +1615,7 @@ async function generateSingleSalePDF(sale) {
   const activeShopTitle = (shopName || 'Simple Salon').toUpperCase();
   const invNumber = `INV-${String(sale.id).slice(-6)}`;
   const invDate = formatDateDisplay(sale.date);
-  const invTime = new Date(Number(sale.id)).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true });
+  const invTime = getSaleTime(sale) || new Date(Number(sale.id)).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true });
   const billedBy = sale.byName || sale.by || uname || user || 'Team';
   const payMode = sale.pay || 'Cash';
   const isPending = payMode === 'Pending';
@@ -1581,7 +1855,7 @@ async function shareSingleSaleWhatsApp(saleId) {
       `✂️ *${(shopName || 'SIMPLE SALON').toUpperCase()} — INVOICE*\n` +
       `━━━━━━━━━━━━━━━━━━\n` +
       `🧾 *Invoice #:* INV-${String(sale.id).slice(-6)}\n` +
-      `📅 *Date:* ${formatDateDisplay(sale.date)}\n` +
+      `📅 *Date & Time:* ${formatDateDisplay(sale.date)}${getSaleTime(sale) ? ' at ' + getSaleTime(sale) : ''}\n` +
       `👤 *Team:* ${sale.byName || sale.by || uname || user || 'Team'}\n` +
       `━━━━━━━━━━━━━━━━━━\n` +
       `*Services:*\n` +
@@ -1632,7 +1906,7 @@ async function shareSingleSaleAnywhere(saleId) {
 
     const shareText =
       `${(shopName || 'Simple Salon').toUpperCase()} Invoice #INV-${String(sale.id).slice(-6)}\n` +
-      `Date: ${formatDateDisplay(sale.date)}\n` +
+      `Date & Time: ${formatDateDisplay(sale.date)}${getSaleTime(sale) ? ' at ' + getSaleTime(sale) : ''}\n` +
       `Total: ₹${Number(sale.total).toLocaleString('en-IN')}\n` +
       `Payment: ${sale.pay || 'Cash'}\n` +
       `Team: ${sale.byName || sale.by || uname || user || 'Team'}`;
@@ -1888,6 +2162,16 @@ document.querySelectorAll('.modal').forEach(m=>m.addEventListener('click',e=>{
   }
 }));
 
+document.addEventListener('click', e => {
+  const pop = $('dashRangePopover');
+  if (pop && !pop.classList.contains('hide')) {
+    const wrap = $('dashRangeWrap');
+    if (wrap && !wrap.contains(e.target)) {
+      closeDashRangePicker();
+    }
+  }
+});
+
 // ---- admin dashboard ----
 const fmtAxis=v=>new Intl.NumberFormat('en-IN',{notation:'compact',maximumFractionDigits:1}).format(v);
 function mkChart(id,cfg){
@@ -1915,13 +2199,234 @@ async function refreshTeamUsers(){
   }catch{return teamUsers}
 }
 
+let dashCalYear = new Date().getFullYear();
+let dashCalMonth = new Date().getMonth();
+let dashCalStart = null;
+let dashCalEnd = null;
+let dashPreset = 'thisMonth';
+let dashInitialized = false;
+
+function formatDateYMD(d) {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
+function setDashPreset(preset, triggerLoad = true) {
+  dashPreset = preset;
+  const t = today();
+  const d = new Date();
+  let from = '', to = '', label = 'This Month';
+
+  if (preset === 'today') {
+    from = t;
+    to = t;
+    label = 'Today';
+  } else if (preset === 'yesterday') {
+    const y = getYesterday();
+    from = y;
+    to = y;
+    label = 'Yesterday';
+  } else if (preset === '7days') {
+    const d7 = new Date();
+    d7.setDate(d7.getDate() - 6);
+    from = formatDateYMD(d7);
+    to = t;
+    label = 'Last 7 Days';
+  } else if (preset === 'thisMonth') {
+    const mStart = new Date(d.getFullYear(), d.getMonth(), 1);
+    from = formatDateYMD(mStart);
+    to = t;
+    label = 'This Month';
+  } else if (preset === 'lastMonth') {
+    const lmStart = new Date(d.getFullYear(), d.getMonth() - 1, 1);
+    const lmEnd = new Date(d.getFullYear(), d.getMonth(), 0);
+    from = formatDateYMD(lmStart);
+    to = formatDateYMD(lmEnd);
+    label = 'Last Month';
+  } else if (preset === 'all') {
+    from = '';
+    to = '';
+    label = 'All Time';
+  }
+
+  dashCalStart = from;
+  dashCalEnd = to;
+
+  if ($('fFrom')) $('fFrom').value = from;
+  if ($('fTo')) $('fTo').value = to;
+  if ($('drInputFrom')) $('drInputFrom').value = from;
+  if ($('drInputTo')) $('drInputTo').value = to;
+  if ($('dashRangeLabel')) $('dashRangeLabel').textContent = label;
+
+  if ($('dashBtnToday')) $('dashBtnToday').classList.toggle('on', preset === 'today');
+  if ($('dashBtnYest')) $('dashBtnYest').classList.toggle('on', preset === 'yesterday');
+  if ($('dashBtnThisMonth')) $('dashBtnThisMonth').classList.toggle('on', preset === 'thisMonth');
+  if ($('dashBtnAll')) $('dashBtnAll').classList.toggle('on', preset === 'all');
+
+  document.querySelectorAll('.dr-preset-btn').forEach(b => {
+    b.classList.toggle('on', b.getAttribute('onclick')?.includes(`'${preset}'`));
+  });
+
+  closeDashRangePicker();
+  if (triggerLoad) loadDash();
+}
+
+function toggleDashRangePicker() {
+  const pop = $('dashRangePopover');
+  if (!pop) return;
+  const isHidden = pop.classList.contains('hide');
+  if (isHidden) {
+    if (dashCalStart) {
+      const parts = dashCalStart.split('-');
+      if (parts.length === 3) {
+        dashCalYear = Number(parts[0]);
+        dashCalMonth = Number(parts[1]) - 1;
+      }
+    }
+    if ($('drInputFrom')) $('drInputFrom').value = dashCalStart || '';
+    if ($('drInputTo')) $('drInputTo').value = dashCalEnd || '';
+    renderDashCalendar();
+    pop.classList.remove('hide');
+  } else {
+    pop.classList.add('hide');
+  }
+}
+
+function closeDashRangePicker() {
+  const pop = $('dashRangePopover');
+  if (pop) pop.classList.add('hide');
+}
+
+function navDashCal(delta) {
+  dashCalMonth += delta;
+  if (dashCalMonth < 0) {
+    dashCalMonth = 11;
+    dashCalYear--;
+  } else if (dashCalMonth > 11) {
+    dashCalMonth = 0;
+    dashCalYear++;
+  }
+  renderDashCalendar();
+}
+
+function renderDashCalendar() {
+  const monthNames = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+  if ($('drCalMonthLabel')) $('drCalMonthLabel').textContent = `${monthNames[dashCalMonth]} ${dashCalYear}`;
+  if ($('drInputFrom')) $('drInputFrom').value = dashCalStart || '';
+  if ($('drInputTo')) $('drInputTo').value = dashCalEnd || '';
+
+  const firstDay = new Date(dashCalYear, dashCalMonth, 1).getDay();
+  const daysInMonth = new Date(dashCalYear, dashCalMonth + 1, 0).getDate();
+  const grid = $('drCalGrid');
+  if (!grid) return;
+
+  let html = '';
+  for (let i = 0; i < firstDay; i++) {
+    html += '<div class="dr-day empty"></div>';
+  }
+
+  for (let day = 1; day <= daysInMonth; day++) {
+    const dayStr = `${dashCalYear}-${String(dashCalMonth + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+    let cls = 'dr-day';
+    if (dashCalStart && dashCalEnd) {
+      if (dayStr === dashCalStart && dayStr === dashCalEnd) {
+        cls += ' range-start range-end';
+      } else if (dayStr === dashCalStart) {
+        cls += ' range-start';
+      } else if (dayStr === dashCalEnd) {
+        cls += ' range-end';
+      } else if (dayStr > dashCalStart && dayStr < dashCalEnd) {
+        cls += ' in-range';
+      }
+    } else if (dashCalStart && dayStr === dashCalStart) {
+      cls += ' range-start range-end';
+    }
+    html += `<div class="${cls}" onclick="onDashDayClick('${dayStr}')">${day}</div>`;
+  }
+  grid.innerHTML = html;
+
+  const hint = $('drCalHint');
+  if (hint) {
+    if (!dashCalStart) hint.textContent = 'Click start date, then upto date';
+    else if (!dashCalEnd) hint.textContent = 'Click end date to finish range';
+    else hint.textContent = `${formatDateDisplay(dashCalStart)} → ${formatDateDisplay(dashCalEnd)}`;
+  }
+}
+
+function onDashDayClick(dateStr) {
+  if (!dashCalStart || (dashCalStart && dashCalEnd)) {
+    dashCalStart = dateStr;
+    dashCalEnd = null;
+  } else {
+    if (dateStr < dashCalStart) {
+      dashCalEnd = dashCalStart;
+      dashCalStart = dateStr;
+    } else {
+      dashCalEnd = dateStr;
+    }
+  }
+  if ($('drInputFrom')) $('drInputFrom').value = dashCalStart || '';
+  if ($('drInputTo')) $('drInputTo').value = dashCalEnd || '';
+  document.querySelectorAll('.dr-preset-btn').forEach(b => b.classList.remove('on'));
+  renderDashCalendar();
+}
+
+function onDashRangeInputChange() {
+  const from = $('drInputFrom')?.value;
+  const to = $('drInputTo')?.value;
+  if (from) dashCalStart = from;
+  if (to) dashCalEnd = to;
+  if (dashCalStart && dashCalEnd && dashCalStart > dashCalEnd) {
+    const tmp = dashCalStart;
+    dashCalStart = dashCalEnd;
+    dashCalEnd = tmp;
+    if ($('drInputFrom')) $('drInputFrom').value = dashCalStart;
+    if ($('drInputTo')) $('drInputTo').value = dashCalEnd;
+  }
+  if (dashCalStart) {
+    const parts = dashCalStart.split('-');
+    if (parts.length === 3) {
+      dashCalYear = Number(parts[0]);
+      dashCalMonth = Number(parts[1]) - 1;
+    }
+  }
+  document.querySelectorAll('.dr-preset-btn').forEach(b => b.classList.remove('on'));
+  renderDashCalendar();
+}
+
+function applyDashRangePicker() {
+  const fromVal = $('drInputFrom')?.value;
+  const toVal = $('drInputTo')?.value;
+  if (fromVal) dashCalStart = fromVal;
+  if (toVal) dashCalEnd = toVal;
+  if (dashCalStart && !dashCalEnd) dashCalEnd = dashCalStart;
+  if (!dashCalStart) {
+    dashCalStart = today();
+    dashCalEnd = today();
+  }
+  if ($('fFrom')) $('fFrom').value = dashCalStart;
+  if ($('fTo')) $('fTo').value = dashCalEnd;
+  const label = dashCalStart === dashCalEnd
+    ? formatDateDisplay(dashCalStart)
+    : `${formatDateDisplay(dashCalStart)} – ${formatDateDisplay(dashCalEnd)}`;
+  if ($('dashRangeLabel')) $('dashRangeLabel').textContent = label;
+  closeDashRangePicker();
+  loadDash();
+}
+
 async function loadDash(){
   if(role!=='admin')return;
+  if (!dashInitialized) {
+    dashInitialized = true;
+    setDashPreset('thisMonth', false);
+  }
   const p=new URLSearchParams();
-  if($('fFrom').value)p.set('from',$('fFrom').value);
-  if($('fTo').value)p.set('to',$('fTo').value);
-  if($('fUser').value)p.set('user',$('fUser').value);
-  if($('fPay').value)p.set('pay',$('fPay').value);
+  if($('fFrom') && $('fFrom').value) p.set('from',$('fFrom').value);
+  if($('fTo') && $('fTo').value) p.set('to',$('fTo').value);
+  if($('fUser') && $('fUser').value) p.set('user',$('fUser').value);
+  if($('fPay') && $('fPay').value) p.set('pay',$('fPay').value);
   try{
     const [d,,st]=await Promise.all([
       api('/api/admin/summary?'+p),
@@ -1931,13 +2436,23 @@ async function loadDash(){
     renderDash(d);
     renderTeam(teamUsers);
     renderSync(st);
-  }catch(e){alert(e.message)}
+    checkOwnerNotifications();
+    checkSheetConn();
+  }catch(e){
+    console.warn('loadDash error:', e.message);
+  }
 }
-function clearDashF(){$('fFrom').value='';$('fTo').value='';$('fUser').value='';$('fPay').value='';loadDash()}
+function clearDashF(){
+  setDashPreset('thisMonth', false);
+  if ($('fUser')) $('fUser').value='';
+  if ($('fPay')) $('fPay').value='';
+  loadDash();
+}
 
 function renderSync(s){
   const el=$('syncBar');
-  if(!s.configured){
+  if (!el) return;
+  if(!s || !s.configured){
     el.innerHTML='<span>Google Sheet: <b>not connected</b> — paste your web app URL into <b>config.json</b> (sheetWebappUrl), then restart</span>';
     return;
   }
@@ -1961,8 +2476,9 @@ async function syncBackfill(){
   if(!confirm('Push every recorded sale to the sheet? Existing rows are not duplicated.'))return;
   try{
     const r=await api('/api/sync/backfill',{method:'POST'});
-    alert('Pushed '+r.pushed+' sale'+(r.pushed===1?'':'s')+' to the sheet.');
+    showPrompt('Pushed '+r.pushed+' sale'+(r.pushed===1?'':'s')+' to the sheet.', 'success');
     renderSync(r);
+    checkSheetConn();
     setTimeout(fetchSheetIds, 1500);
   }catch(e){alert(e.message)}
 }
@@ -2012,6 +2528,7 @@ async function syncTeamFromSheet(){
     teamUsers=r.users;
     renderTeam(teamUsers);
     await refreshTeamUsers();
+    checkOwnerNotifications();
     alert('Team accounts synced from Google Sheet!');
   }catch(e){alert(e.message)}
 }
@@ -2019,6 +2536,8 @@ async function approveUser(u, displayName){
   try{
     await api('/api/admin/users/'+u+'/approve',{method:'POST'});
     showPrompt('✓ ' + (displayName || u) + ' has been approved! Status is now Active.', 3500);
+    await refreshTeamUsers();
+    await checkOwnerNotifications();
     await loadDash();
   }catch(e){alert(e.message)}
 }
@@ -2027,72 +2546,196 @@ async function removeUser(u){
   try{
     await api('/api/admin/users/'+u,{method:'DELETE'});
     allSales=allSales.filter(s=>s.by!==u);
+    await refreshTeamUsers();
+    await checkOwnerNotifications();
     await loadDash();renderSales();
   }catch(e){alert(e.message)}
 }
 
 function renderDash(d){
-  $('dRev').textContent=inr(d.totals.revenue);
-  $('dCount').textContent=d.totals.count;
-  $('dAvg').textContent=inr(d.totals.avg);
-  $('dAct').textContent=d.totals.activeMembers;
+  if (!d) return;
+  const totals = d.totals || { revenue: 0, count: 0, avg: 0, activeMembers: 0 };
+  const trend = Array.isArray(d.trend) ? d.trend : [];
+  const members = Array.isArray(d.members) ? d.members : [];
+  const payments = Array.isArray(d.payments) ? d.payments : [];
+  const services = Array.isArray(d.services) ? d.services : [];
+  const memberOptions = Array.isArray(d.memberOptions) ? d.memberOptions : [];
 
-  const sel=$('fUser').value;
-  $('fUser').innerHTML='<option value="">All members</option>'+
-    d.memberOptions.map(m=>`<option value="${esc(m.user)}">${esc(m.name)}</option>`).join('');
-  $('fUser').value=sel;
+  if ($('dRev')) $('dRev').textContent = inr(totals.revenue || 0);
+  if ($('dCount')) $('dCount').textContent = totals.count || 0;
+  if ($('dAvg')) $('dAvg').textContent = inr(totals.avg || 0);
+  if ($('dAct')) $('dAct').textContent = totals.activeMembers || 0;
 
-  mkChart('chTrend',{
-    type:'line',
-    data:{labels:d.trend.map(t=>t.date),datasets:[{
-      label:'Revenue',data:d.trend.map(t=>t.total),
-      borderColor:'#c8a46a',backgroundColor:'rgba(200,164,106,.15)',fill:true,tension:.3,pointRadius:2
-    }]},
-    options:{maintainAspectRatio:false,plugins:{legend:{display:false},tooltip:tooltipCfg},
-      scales:{y:{beginAtZero:true,ticks:{callback:fmtAxis}},x:{ticks:{maxTicksLimit:10,autoSkip:true}}}}
-  });
+  if ($('fUser')) {
+    const sel = $('fUser').value;
+    $('fUser').innerHTML = '<option value="">All members</option>' +
+      memberOptions.map(m => `<option value="${esc(m.user)}">${esc(m.name)}</option>`).join('');
+    $('fUser').value = sel;
+  }
 
-  const mem=d.members.filter(m=>m.total>0);
-  mkChart('chMembers',{
-    type:'bar',
-    data:{labels:mem.map(m=>m.name),datasets:[{
-      label:'Revenue',data:mem.map(m=>m.total),backgroundColor:'#c8a46a',borderRadius:6
-    }]},
-    options:{indexAxis:'y',maintainAspectRatio:false,plugins:{legend:{display:false},tooltip:tooltipCfg},
-      scales:{x:{beginAtZero:true,ticks:{callback:fmtAxis}},y:{grid:{display:false}}}}
-  });
+  try {
+    mkChart('chTrend', {
+      type: 'line',
+      data: {
+        labels: trend.map(t => t.date),
+        datasets: [{
+          label: 'Revenue',
+          data: trend.map(t => Number(t.total) || 0),
+          borderColor: '#c8a46a',
+          backgroundColor: 'rgba(200,164,106,.15)',
+          fill: true,
+          tension: .3,
+          pointRadius: 2
+        }]
+      },
+      options: {
+        maintainAspectRatio: false,
+        plugins: { legend: { display: false }, tooltip: tooltipCfg },
+        scales: { y: { beginAtZero: true, ticks: { callback: fmtAxis } }, x: { ticks: { maxTicksLimit: 10, autoSkip: true } } }
+      }
+    });
+  } catch (err) { console.warn('chTrend error:', err); }
 
-  const payColors = {
-    'Cash': '#16a34a',
-    'UPI': '#4f46e5',
-    'Pending': '#f59e0b',
-    'Card': '#8a8780'
-  };
-  const bgColors = d.payments.map(p => payColors[p.mode] || '#c8a46a');
-  mkChart('chPay',{
-    type:'doughnut',
-    data:{labels:d.payments.map(p=>p.mode),datasets:[{
-      data:d.payments.map(p=>p.total),backgroundColor:bgColors,borderWidth:0
-    }]},
-    options:{maintainAspectRatio:false,cutout:'65%',plugins:{legend:{position:'bottom'},
-      tooltip:{callbacks:{label:c=>c.label+': '+inr(c.parsed)}}}}
-  });
+  try {
+    const mem = members.filter(m => (Number(m.total) || 0) > 0);
+    mkChart('chMembers', {
+      type: 'bar',
+      data: {
+        labels: mem.map(m => m.name),
+        datasets: [{
+          label: 'Revenue',
+          data: mem.map(m => Number(m.total) || 0),
+          backgroundColor: '#c8a46a',
+          borderRadius: 6
+        }]
+      },
+      options: {
+        indexAxis: 'y',
+        maintainAspectRatio: false,
+        plugins: { legend: { display: false }, tooltip: tooltipCfg },
+        scales: { x: { beginAtZero: true, ticks: { callback: fmtAxis } }, y: { grid: { display: false } } }
+      }
+    });
+  } catch (err) { console.warn('chMembers error:', err); }
 
-  mkChart('chSvc',{
-    type:'bar',
-    data:{labels:d.services.map(s=>s.name),datasets:[{
-      label:'Revenue',data:d.services.map(s=>Math.round(s.total)),backgroundColor:'#1c1c1a',borderRadius:6
-    }]},
-    options:{maintainAspectRatio:false,plugins:{legend:{display:false},tooltip:tooltipCfg},
-      scales:{y:{beginAtZero:true,ticks:{callback:fmtAxis}},x:{grid:{display:false}}}}
-  });
+  try {
+    const payColors = {
+      'Cash': '#16a34a',
+      'UPI': '#4f46e5',
+      'Pending': '#f59e0b',
+      'Card': '#8a8780'
+    };
+    const bgColors = payments.map(p => payColors[p.mode] || '#c8a46a');
+    mkChart('chPay', {
+      type: 'doughnut',
+      data: {
+        labels: payments.map(p => p.mode),
+        datasets: [{
+          data: payments.map(p => Number(p.total) || 0),
+          backgroundColor: bgColors,
+          borderWidth: 0
+        }]
+      },
+      options: {
+        maintainAspectRatio: false,
+        cutout: '65%',
+        plugins: { legend: { position: 'bottom' }, tooltip: { callbacks: { label: c => c.label + ': ' + inr(c.parsed) } } }
+      }
+    });
+  } catch (err) { console.warn('chPay error:', err); }
 
-  $('mList').innerHTML=d.members.length?d.members.map(m=>`
-    <div class="mrow"><div><b>${esc(m.name)}</b><small>${m.count} ${m.count===1?'entry':'entries'}</small></div>
-    <div class="amt">${inr(m.total)}</div>
-    <div><div class="prog"><i style="width:${Math.min(m.share,100)}%"></i></div><span class="prog-lbl">${m.share}% of revenue</span></div>
-    <div style="font-size:12px;color:var(--mute)">${m.count?inr(Math.round(m.total/m.count))+' avg':'—'}</div></div>`).join('')
-    :'<div class="empty">No team members yet</div>';
+  try {
+    mkChart('chSvc', {
+      type: 'bar',
+      data: {
+        labels: services.map(s => s.name),
+        datasets: [{
+          label: 'Revenue',
+          data: services.map(s => Math.round(Number(s.total) || 0)),
+          backgroundColor: '#1c1c1a',
+          borderRadius: 6
+        }]
+      },
+      options: {
+        maintainAspectRatio: false,
+        plugins: { legend: { display: false }, tooltip: tooltipCfg },
+        scales: { y: { beginAtZero: true, ticks: { callback: fmtAxis } }, x: { grid: { display: false } } }
+      }
+    });
+  } catch (err) { console.warn('chSvc error:', err); }
+
+  if ($('mList')) {
+    $('mList').innerHTML = members.length ? members.map(m => `
+      <div class="mrow"><div><b>${esc(m.name)}</b><small>${m.count} ${m.count === 1 ? 'entry' : 'entries'}</small></div>
+      <div class="amt">${inr(m.total || 0)}</div>
+      <div><div class="prog"><i style="width:${Math.min(m.share || 0, 100)}%"></i></div><span class="prog-lbl">${m.share || 0}% of revenue</span></div>
+      <div style="font-size:12px;color:var(--mute)">${m.count ? inr(Math.round((m.total || 0) / m.count)) + ' avg' : '—'}</div></div>`).join('')
+      : '<div class="empty">No team members yet</div>';
+  }
+}
+
+// ---- Google Sheet Connection Indicator ----
+async function checkSheetConn(interactive = false) {
+  const dot = $('sheetStatusDot');
+  const pill = $('sheetStatusIndicator');
+  const txt = $('sheetStatusText');
+  if (dot) dot.className = 'sheet-status-dot syncing';
+  if (txt) txt.textContent = 'Checking…';
+  if (pill) pill.setAttribute('title', 'Checking Google Sheet connection…');
+  try {
+    const st = await api('/api/sync/status');
+    if (st && st.configured && !st.lastError) {
+      if (dot) dot.className = 'sheet-status-dot online';
+      if (txt) txt.textContent = 'Sheet Connected';
+      if (pill) pill.setAttribute('title', '🟢 Google Sheet Connected (Click to re-check)');
+      if (interactive) showPrompt('🟢 Google Sheet is active & connected!', 'success');
+    } else if (st && st.configured && st.lastError) {
+      if (dot) dot.className = 'sheet-status-dot offline';
+      if (txt) txt.textContent = 'Sync Issue';
+      if (pill) pill.setAttribute('title', '⚠️ Google Sheet Sync Issue: ' + st.lastError);
+      if (interactive) showPrompt('⚠️ Sheet sync issue: ' + st.lastError, 'warn');
+    } else {
+      if (dot) dot.className = 'sheet-status-dot offline';
+      if (txt) txt.textContent = 'Not Connected';
+      if (pill) pill.setAttribute('title', '⚠️ Google Sheet Not Connected');
+      if (interactive) showPrompt('⚠️ Google Sheet URL not configured', 'warn');
+    }
+    return st;
+  } catch (e) {
+    if (dot) dot.className = 'sheet-status-dot offline';
+    if (txt) txt.textContent = 'Offline';
+    if (pill) pill.setAttribute('title', '⚠️ Google Sheet Offline: ' + e.message);
+    if (interactive) showPrompt('⚠️ Unable to verify Sheet connection: ' + e.message, 'warn');
+    return null;
+  }
+}
+
+// ---- Owner Notifications for Pending Team Approvals ----
+async function checkOwnerNotifications() {
+  if (role !== 'admin') return;
+  try {
+    const data = await api('/api/admin/notifications');
+    const banner = $('pendingOwnerBanner');
+    if (data && data.count > 0) {
+      if (banner) {
+        banner.classList.remove('hide');
+        const names = data.pendingUsers.map(u => u.name).join(', ');
+        if ($('pobTitle')) $('pobTitle').textContent = `${data.count} team member${data.count > 1 ? 's' : ''} awaiting approval`;
+        if ($('pobDesc')) $('pobDesc').textContent = `Approve ${names} to grant access`;
+      }
+    } else {
+      if (banner) banner.classList.add('hide');
+    }
+  } catch {}
+}
+
+function openPendingApprovals() {
+  tab(3);
+  const paBox = $('pendingApprovalsBox');
+  if (paBox) {
+    paBox.scrollIntoView({ behavior: 'smooth' });
+    paBox.style.animation = 'highlightPulse 1.5s ease';
+  }
 }
 
 // ---- auth ----
@@ -2240,8 +2883,11 @@ function start(d, opts = {}){
   stats();
   updateCart();
   updateNetStatus();
+  updateSidebarInfo();
   syncPendingSales();
+  checkSheetConn();
   if (role === 'admin') {
+    checkOwnerNotifications();
     refreshTeamUsers().then(users => {
       const pendingCount = (users || []).filter(u => u.status === 'deactivated' || u.status === 'pending').length;
       if (pendingCount > 0) {
@@ -2280,6 +2926,7 @@ function applyFreshData(d) {
     stats();
   }
   updateNetStatus();
+  updateSidebarInfo();
   syncPendingSales();
   if (role === 'admin') {
     refreshTeamUsers();
@@ -2291,6 +2938,7 @@ function applyFreshData(d) {
 
 async function logout(message){
   isLoggingOut = true;
+  closeSidebar();
   const oldToken = token;
   token = '';
   try {
@@ -2442,3 +3090,14 @@ async function initSession() {
 }
 
 initSession();
+
+// Periodic Google Sheet connection status & owner notifications poller
+setInterval(() => {
+  if (token && user) {
+    checkSheetConn();
+    if (role === 'admin') {
+      checkOwnerNotifications();
+    }
+  }
+}, 25000);
+
