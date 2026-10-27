@@ -178,12 +178,21 @@ async function hydrateSalesFromSheet(force = false) {
 
     db.saveUsers(users);
 
-    for (const [key, incomingList] of Object.entries(incomingByUser)) {
-      const existing = db.getSales(key);
+    const sheetIdSet = new Set(sheetIds);
+    const nowTs = Date.now();
+
+    for (const key of Object.keys(users)) {
+      const incomingList = incomingByUser[key] || [];
       const map = new Map();
-      for (const s of existing) map.set(String(s.id), s);
+      // Google Sheet is the authoritative source
       for (const s of incomingList) {
-        if (!map.has(String(s.id))) {
+        map.set(String(s.id), s);
+      }
+      // Preserve only brand-new local sales (< 2 minutes old) in case they were just entered and still syncing
+      const existing = db.getSales(key) || [];
+      for (const s of existing) {
+        const age = nowTs - (Number(s.id) || 0);
+        if (age >= 0 && age < 120000 && !map.has(String(s.id))) {
           map.set(String(s.id), s);
         }
       }
@@ -192,6 +201,11 @@ async function hydrateSalesFromSheet(force = false) {
       db.saveSales(key, merged);
     }
 
+    // Prune uploaded IDs that were removed from the sheet
+    const allLocalUploaded = db.getUploadedIds();
+    for (const id of allLocalUploaded) {
+      if (!sheetIdSet.has(String(id))) db.unmarkUploaded(id);
+    }
     db.markUploaded(sheetIds);
     lastSheetHydration = Date.now();
     return true;
@@ -898,69 +912,16 @@ app.post('/api/sales/:id/upload', requireAuth, async (req, res) => {
 // Manually upload all non-uploaded sales to Google Sheet
 app.post('/api/sales/upload-all', requireAuth, async (req, res) => {
   try {
-    const isAdmin = auth.isAdmin(req.user.username);
-    const users = db.getUsers();
-    let salesToInspect = [];
-
-    if (isAdmin) {
-      for (const [key, u] of Object.entries(users)) {
-        for (const s of db.getSales(key)) {
-          salesToInspect.push({ sale: s, memberName: u.name, userKey: key });
-        }
-      }
-    } else {
-      const mySales = db.getSales(req.user.username);
-      const myName = req.user.name || req.user.username;
-      for (const s of mySales) {
-        salesToInspect.push({ sale: s, memberName: myName, userKey: req.user.username });
-      }
-    }
-
-    // Pull already uploaded IDs from Google Sheet + local db
-    let sheetIds = new Set(db.getUploadedIds().map(String));
-    try {
-      let sheetSales = await gsheet.pullSales();
-      if (Array.isArray(sheetSales)) {
-        for (const s of sheetSales) {
-          if (s && s.id != null) sheetIds.add(String(s.id));
-        }
-      }
-    } catch {}
-
-    let uploaded = 0;
-    for (const item of salesToInspect) {
-      const s = item.sale;
-      if (!sheetIds.has(String(s.id))) {
-        await gsheet.push({
-          type: 'sale_created',
-          data: {
-            id: s.id,
-            date: normalizeDateStr(s.date),
-            member: item.memberName,
-            by: s.by || item.userKey || req.user.username,
-            services: (s.items || [])
-              .map(i => i.name + (i.qty > 1 ? ' ×' + i.qty : ''))
-              .join(', '),
-            pay: s.pay,
-            calc: Number(s.calc) || 0,
-            total: Number(s.total) || 0,
-            note: s.note || ''
-          }
-        });
-        sheetIds.add(String(s.id));
-        uploaded++;
-      }
-    }
-
-    // Flush any pending events in the queue to Google Sheet
+    // 1. Flush any pending events in the queue to Google Sheet
     await gsheet.flush();
-    db.markUploaded(Array.from(sheetIds));
-
+    // 2. Hydrate from Google Sheet so local state strictly matches Google Sheet
+    await hydrateSalesFromSheet(true);
+    const all = getAllSalesMerged();
     res.json({
       ok: true,
-      uploaded,
-      total: salesToInspect.length,
-      confirmedIds: Array.from(sheetIds)
+      uploaded: 0,
+      total: all.length,
+      sales: all
     });
   } catch (err) {
     res.status(500).json({ error: err.message });

@@ -69,63 +69,57 @@ function removeFromOfflineQueue(id) {
   saveOfflineQueue(getOfflineQueue().filter(x => x.id !== id));
 }
 
-// ---- sheet-confirmed IDs ----
-const CONFIRMED_CACHE_KEY = () => 'sheet_confirmed_ids_' + (user || 'guest');
-function loadCachedConfirmedIds() {
-  try {
-    const raw = JSON.parse(localStorage.getItem(CONFIRMED_CACHE_KEY()) || '[]');
-    return new Set(raw.map(String));
-  } catch { return new Set(); }
-}
-function saveCachedConfirmedIds(set) {
-  try {
-    localStorage.setItem(CONFIRMED_CACHE_KEY(), JSON.stringify(Array.from(set)));
-  } catch {}
-}
-
-let sheetConfirmedIds = loadCachedConfirmedIds();
-let sheetIdsFetched = sheetConfirmedIds.size > 0;
-
-async function fetchSheetIds() {
-  if (!navigator.onLine || !token) return;
-  try {
-    const r = await api('/api/sales/sheet');
-    if (r && Array.isArray(r.ids)) {
-      if (r.fromSheet) {
-        // Sheet was actually reached — REPLACE (not merge) confirmed IDs
-        // This means rows deleted from the sheet will flip back to "Not Uploaded"
-        sheetConfirmedIds = new Set(r.ids.map(String));
-      } else {
-        // Sheet unreachable — only add from local cache fallback, never remove
-        for (const id of r.ids) sheetConfirmedIds.add(String(id));
-      }
-      sheetIdsFetched = true;
-      saveCachedConfirmedIds(sheetConfirmedIds);
-      renderSales();
-      updateNetStatus();
-    }
-  } catch {}
+// ---- Sheet-backed Sales & Offline Queue Sync ----
+function isInQueue(saleId) {
+  return getOfflineQueue().some(x => String(x.id) === String(saleId));
 }
 
 function isUploaded(saleId) {
-  return sheetConfirmedIds.has(String(saleId));
+  return !isInQueue(saleId);
 }
 
-function isInQueue(saleId) {
-  return getOfflineQueue().some(x => x.id === saleId);
+function getUploadStatus(saleId) {
+  return isInQueue(saleId) ? 'not-uploaded' : 'uploaded';
 }
 
-// Calculate total non-uploaded / non-synced items across offline queue & server sales
+// Only unsynced items in local storage offline queue are pending sync
 function countTotalPending() {
-  const q = getOfflineQueue();
-  const notUploadedSales = typeof activeSales === 'function' ? activeSales().filter(s => {
-    const st = getUploadStatus(s.id);
-    return st === 'not-uploaded' || st === 'unknown';
-  }) : [];
-  const idSet = new Set(notUploadedSales.map(s => String(s.id)));
-  for (const s of q) idSet.add(String(s.id));
-  return idSet.size;
+  return getOfflineQueue().length;
 }
+
+// Refresh sales from Google Sheet (Google Sheet is the authoritative source of truth)
+async function refreshSalesFromSheet() {
+  if (!navigator.onLine || !token) return;
+  try {
+    if (role === 'admin') {
+      const d = await api('/api/admin/sales');
+      if (d && Array.isArray(d.sales)) {
+        const q = getOfflineQueue();
+        const map = new Map();
+        for (const s of norm(d.sales)) map.set(String(s.id), s);
+        for (const s of q) if (s && s.id) map.set(String(s.id), normSale(s));
+        allSales = Array.from(map.values()).sort((a, b) => String(b.date).localeCompare(String(a.date)) || Number(b.id) - Number(a.id));
+        sales = allSales;
+      }
+    } else {
+      const d = await api('/api/bootstrap');
+      if (d && Array.isArray(d.sales)) {
+        const q = getOfflineQueue();
+        const map = new Map();
+        for (const s of norm(d.sales)) map.set(String(s.id), s);
+        for (const s of q) if (s && s.id) map.set(String(s.id), normSale(s));
+        sales = Array.from(map.values()).sort((a, b) => String(b.date).localeCompare(String(a.date)) || Number(b.id) - Number(a.id));
+      }
+    }
+    renderSales();
+    stats();
+    saveSessionCache();
+  } catch (e) {
+    console.warn('refreshSalesFromSheet notice:', e.message);
+  }
+}
+
+const fetchSheetIds = refreshSalesFromSheet;
 
 // Update all sync button states and badges
 function updateSyncBadges() {
@@ -184,21 +178,18 @@ async function syncPendingSales() {
   try {
     const res = await api('/api/sales/sync', { method: 'POST', body: { sales: q } });
     if (res && res.ok) {
+      // Data is synced with Google Sheet — remove from local storage!
       saveOfflineQueue([]);
-      if (Array.isArray(res.sales)) {
-        sales = norm(res.sales);
-        if (role === 'admin') loadAllSales();
-        renderSales();
-        stats();
-      }
       showBanner(`✓ ${res.synced || q.length} sale${(res.synced || q.length) === 1 ? '' : 's'} synced with Google Sheet`, 'synced');
-      fetchSheetIds();
+      await refreshSalesFromSheet();
     }
   } catch (e) {
-    console.warn('Auto-sync failed:', e.message);
+    console.warn('Auto-sync notice:', e.message);
   } finally {
     isSyncing = false;
     updateNetStatus();
+    renderSales();
+    stats();
   }
 }
 
@@ -237,7 +228,7 @@ function updateNetStatus() {
   const el = $('netStatus');
   if (!el || !user) return;
   const q = getOfflineQueue();
-  const pending = countTotalPending();
+  const pending = q.length;
   updateSyncBadges();
 
   if (isSyncing) {
@@ -248,13 +239,13 @@ function updateNetStatus() {
   }
   if (!navigator.onLine) {
     el.className = 'net-status banner-offline';
-    el.innerHTML = '<span>⚡ Offline — ' + (q.length ? q.length + ' entry(s) pending upload' : 'ready') + '. Auto-syncs on reconnect.</span>';
+    el.innerHTML = '<span>⚡ Offline — ' + (q.length ? q.length + ' entry(s) in local storage' : 'ready') + '. Auto-syncs on reconnect.</span>';
     el.classList.remove('hide');
     return;
   }
   if (pending > 0) {
     el.className = 'net-status banner-offline';
-    el.innerHTML = '<span>⚡ ' + pending + ' sale' + (pending === 1 ? '' : 's') + ' not uploaded to Google Sheet</span><button class="sync-btn" onclick="uploadAll()">Upload now</button>';
+    el.innerHTML = '<span>⚡ ' + pending + ' sale' + (pending === 1 ? '' : 's') + ' in local storage pending upload</span><button class="sync-btn" onclick="uploadAll()">Upload now</button>';
     el.classList.remove('hide');
     return;
   }
@@ -719,16 +710,15 @@ async function saveSale(){
     }
     stats(); updateNetStatus(); renderSales();
     saveSessionCache();
-    showPrompt('💾 Saved to your device — will upload when online', 'offline');
+    showPrompt('💾 Saved to local storage — will upload automatically when online', 'offline');
     return;
   }
 
   try{
     const sale = await api('/api/sales', { method: 'POST', body: saleObj });
+    // Synced with Google Sheet -> do not keep in local storage offline queue!
+    removeFromOfflineQueue(sale.id);
     const normalizedSale = normSale({ ...saleObj, ...sale, by: user, byName: uname });
-    sheetConfirmedIds.add(String(normalizedSale.id));
-    sheetIdsFetched = true;
-    saveCachedConfirmedIds(sheetConfirmedIds);
 
     sales = [normalizedSale, ...sales.filter(s => String(s.id) !== String(normalizedSale.id))];
     if (role === 'admin') {
@@ -739,10 +729,8 @@ async function saveSale(){
     saveSessionCache();
     updateNetStatus();
     showPrompt('✓ Data saved & uploaded to Google Sheet!', 'success');
-    syncPendingSales();
-    setTimeout(fetchSheetIds, 1500);
   }catch(e){
-    // In any network drop or server delay, safely preserve the sale locally so today's stats never drop
+    // If request failed or network dropped, store in local storage offline queue
     queueOfflineSale(saleObj);
     const normalizedSale = normSale({ ...saleObj, by: user, byName: uname });
     sales = [normalizedSale, ...sales.filter(s => String(s.id) !== String(normalizedSale.id))];
@@ -751,7 +739,7 @@ async function saveSale(){
     }
     stats(); updateNetStatus(); renderSales();
     saveSessionCache();
-    showPrompt('💾 Saved to your device — will auto-sync to Sheet', 'offline');
+    showPrompt('💾 Saved to local storage — will upload automatically when online', 'offline');
   }
 }
 
@@ -924,14 +912,17 @@ async function loadAllSales(){
   try{
     const d = await api('/api/admin/sales');
     if (d && Array.isArray(d.sales)) {
+      const q = getOfflineQueue();
       const map = new Map();
+      // Google Sheet is authoritative for confirmed sales
       for (const s of norm(d.sales)) map.set(String(s.id), s);
-      for (const s of (allSales || [])) if (s && s.id && !map.has(String(s.id))) map.set(String(s.id), s);
-      for (const s of (sales || [])) if (s && s.id && !map.has(String(s.id))) map.set(String(s.id), s);
-      for (const s of getOfflineQueue()) if (s && s.id) map.set(String(s.id), normSale(s));
+      // Only keep unsynced entries from local storage offline queue
+      for (const s of q) if (s && s.id) map.set(String(s.id), normSale(s));
       allSales = Array.from(map.values()).sort((a, b) => String(b.date).localeCompare(String(a.date)) || Number(b.id) - Number(a.id));
+      sales = allSales;
       renderSales();
       stats();
+      saveSessionCache();
     }
   }catch(e){
     console.warn('loadAllSales error:', e.message);
@@ -989,10 +980,8 @@ function filtered(){
     return true;
   });
   if (showOnlyNotUploaded) {
-    list = list.filter(s => {
-      const st = getUploadStatus(s.id);
-      return st === 'not-uploaded' || st === 'unknown';
-    });
+    // Only show sales currently in local storage waiting to sync
+    list = list.filter(s => isInQueue(s.id));
   }
   return list;
 }
@@ -1022,9 +1011,7 @@ function getSaleTime(s) {
 }
 
 function getUploadStatus(saleId) {
-  if (isInQueue(saleId)) return 'not-uploaded';
-  if (sheetIdsFetched) return sheetConfirmedIds.has(String(saleId)) ? 'uploaded' : 'not-uploaded';
-  return 'unknown'; // sheet IDs not yet fetched
+  return isInQueue(saleId) ? 'not-uploaded' : 'uploaded';
 }
 
 // Count how many entries are not uploaded or unknown
@@ -1040,14 +1027,12 @@ function renderSales(){
   updateSyncBadges();
 
   $('list').innerHTML = l.length ? l.map(s => {
-    const status = getUploadStatus(s.id);
-    let statusBtn;
-    if (status === 'uploaded') {
-      statusBtn = `<button class="upload-tag uploaded" title="Confirmed in Google Sheet — click to re-check" onclick="refreshSheetStatus()">✓ Uploaded</button>`;
-    } else if (status === 'not-uploaded') {
-      statusBtn = `<button class="upload-tag not-uploaded" title="Not found in Google Sheet — click to upload" onclick="uploadSingle(${s.id})">↑ Not Uploaded</button>`;
+    const isUnsynced = isInQueue(s.id);
+    let statusBtn = '';
+    if (isUnsynced) {
+      statusBtn = `<button class="upload-tag not-uploaded" title="Stored in local storage — click to upload to Google Sheet" onclick="uploadSingle('${s.id}')">⚡ Upload to Sheet</button>`;
     } else {
-      statusBtn = `<button class="upload-tag not-uploaded" title="Upload status unknown — click to upload to Google Sheet" onclick="uploadSingle(${s.id})">↑ Upload to Sheet</button>`;
+      statusBtn = `<span class="upload-tag uploaded" title="Data fetched & confirmed from Google Sheet">✓ In Sheet</span>`;
     }
     const timeVal = getSaleTime(s);
     const timeTag = timeVal ? ` · <span class="sale-dt-tag">⏰ ${esc(timeVal)}</span>` : '';
@@ -1055,152 +1040,77 @@ function renderSales(){
       <small><span class="sale-dt-date">📅 ${s.date}</span>${timeTag} · <span class="${s.pay==='Pending'?'pill warn':''}">${s.pay}</span>${role==='admin'&&s.byName?' · '+esc(s.byName):''}${s.note?' · '+esc(s.note):''}${s.total!==s.calc?' · adjusted from '+inr(s.calc):''}</small>
       <div class="sale-tags">
         ${statusBtn}
-        <button type="button" class="sale-invoice-btn wa" onclick="shareSingleSaleWhatsApp(${s.id})" title="Share this sale Invoice on WhatsApp">
+        <button type="button" class="sale-invoice-btn wa" onclick="shareSingleSaleWhatsApp('${s.id}')" title="Share this sale Invoice on WhatsApp">
           <span class="wa-ico">💬</span> Invoice
         </button>
-        <button type="button" class="sale-invoice-btn share" onclick="shareSingleSaleAnywhere(${s.id})" title="Share or Download this sale Invoice PDF">
+        <button type="button" class="sale-invoice-btn share" onclick="shareSingleSaleAnywhere('${s.id}')" title="Share or Download this sale Invoice PDF">
           <span>📤</span> PDF
         </button>
       </div></div>
       <div class="amt">${inr(s.total)}</div>
-      <button class="del" onclick="delSale(${s.id})" title="Delete">✕</button></div>`;
+      <button class="del" onclick="delSale('${s.id}')" title="Delete">✕</button></div>`;
   }).join('') : '<div class="empty">No sales found</div>';
   $('ft').textContent = inr(l.reduce((a, s) => a + s.total, 0));
 }
 
 async function refreshSheetStatus() {
-  showBanner('↻ Checking Google Sheet for upload status…', 'syncing');
-  await fetchSheetIds();
+  showBanner('↻ Refreshing latest sales from Google Sheet…', 'syncing');
+  await refreshSalesFromSheet();
 }
 
 async function uploadSingle(saleId) {
-  // If in offline queue, do a full queue sync
-  if (getOfflineQueue().some(x => x.id === saleId)) {
-    await syncPendingSales();
-    renderSales();
-    updateNetStatus();
-    return;
-  }
-  // Disable the button immediately
-  const btn = document.querySelector('#sale-' + saleId + ' .upload-tag');
-  if (btn) { btn.disabled = true; btn.innerHTML = '<span style="opacity:.6">↑ Uploading…</span>'; }
-  try {
-    const r = await api('/api/sales/' + saleId + '/upload', { method: 'POST' });
-    if (r.ok) {
-      sheetConfirmedIds.add(String(saleId));
-      showBanner('✓ Entry uploaded to Google Sheet!', 'payment');
-    } else {
-      showBanner('Upload failed — check sheet connection', 'error');
-    }
-  } catch (e) {
-    showBanner('Upload failed: ' + e.message, 'error');
-  }
+  await syncPendingSales();
   renderSales();
   updateNetStatus();
 }
 
-// Upload ALL not-uploaded / non-synced entries at once
+// Upload unsynced local storage entries or refresh from Google Sheet
 async function uploadAll() {
   if (isSyncing) return;
   if (!navigator.onLine) {
-    showBanner('⚡ Device is offline — connect to internet to upload', 'error');
+    showBanner('⚡ Device is offline — connect to internet to sync', 'error');
     return;
   }
 
-  isSyncing = true;
-  updateSyncBadges();
-  showBanner('↻ Uploading all non-synced data to Google Sheet…', 'syncing');
-
-  let uploadedCount = 0;
-  let offlineSyncedCount = 0;
-
-  try {
-    // 1. Sync client offline queue first
-    const q = getOfflineQueue();
-    if (q.length > 0) {
-      try {
-        const res = await api('/api/sales/sync', { method: 'POST', body: { sales: q } });
-        if (res && res.ok) {
-          saveOfflineQueue([]);
-          offlineSyncedCount = res.synced || q.length;
-          if (Array.isArray(res.sales)) {
-            sales = norm(res.sales);
-            if (role === 'admin') await loadAllSales();
-          }
-        }
-      } catch (err) {
-        console.warn('Offline queue sync error:', err);
-      }
-    }
-
-    // 2. Call server bulk upload endpoint
+  const q = getOfflineQueue();
+  if (q.length > 0) {
+    await syncPendingSales();
+  } else {
+    isSyncing = true;
+    updateSyncBadges();
+    showBanner('↻ Fetching latest data from Google Sheet…', 'syncing');
     try {
-      const bulkRes = await api('/api/sales/upload-all', { method: 'POST' });
-      if (bulkRes && bulkRes.ok) {
-        uploadedCount = (bulkRes.uploaded || 0) + offlineSyncedCount;
-        if (Array.isArray(bulkRes.confirmedIds)) {
-          sheetConfirmedIds = new Set(bulkRes.confirmedIds.map(String));
-          sheetIdsFetched = true;
-        }
-      } else {
-        throw new Error((bulkRes && bulkRes.error) || 'Bulk upload failed');
-      }
-    } catch (bulkErr) {
-      console.warn('Bulk upload fallback to sequential:', bulkErr.message);
-      // Fallback: Individual upload if /api/sales/upload-all had an issue
-      const allS = activeSales();
-      for (const s of allS) {
-        const st = getUploadStatus(s.id);
-        if (st === 'not-uploaded' || st === 'unknown') {
-          if (getOfflineQueue().some(x => x.id === s.id)) continue;
-          try {
-            const r = await api('/api/sales/' + s.id + '/upload', { method: 'POST' });
-            if (r.ok) {
-              sheetConfirmedIds.add(String(s.id));
-              uploadedCount++;
-            }
-          } catch {}
-        }
-      }
-      sheetIdsFetched = true;
+      await refreshSalesFromSheet();
+      showBanner('All data is in sync with Google Sheet ✓', 'synced');
+    } catch (e) {
+      showBanner('Sync error: ' + e.message, 'error');
+    } finally {
+      isSyncing = false;
+      updateNetStatus();
+      renderSales();
+      stats();
     }
-
-    // 3. Re-verify sheet IDs from Google Sheet
-    await fetchSheetIds();
-
-    if (role === 'admin') {
-      await loadAllSales();
-    }
-    renderSales();
-    stats();
-
-    if (uploadedCount > 0) {
-      showBanner(`✓ Successfully uploaded ${uploadedCount} entr${uploadedCount === 1 ? 'y' : 'ies'} to Google Sheet!`, 'payment');
-    } else {
-      showBanner('All data is already synced with Google Sheet ✓', 'synced');
-    }
-  } catch (err) {
-    showBanner('Upload error: ' + err.message, 'error');
-  } finally {
-    isSyncing = false;
-    updateNetStatus();
-    renderSales();
   }
 }
 
 async function delSale(id){
   if(!confirm('Delete this entry?'))return;
-  const s=activeSales().find(x=>x.id===id);
+  const s = activeSales().find(x => String(x.id) === String(id));
+  removeFromOfflineQueue(id);
+  sales = sales.filter(x => String(x.id) !== String(id));
+  allSales = allSales.filter(x => String(x.id) !== String(id));
+  renderSales();
+  stats();
+  saveSessionCache();
   try{
-    if(role==='admin'&&s)await api('/api/admin/sales/'+s.by+'/'+id,{method:'DELETE'});
-    else await api('/api/sales/'+id,{method:'DELETE'});
-    sales=sales.filter(x=>x.id!==id);
-    allSales=allSales.filter(x=>!(x.id===id&&x.by===(s?s.by:user)));
-    removeFromOfflineQueue(id);
-    sheetConfirmedIds.delete(String(id));
-    renderSales();stats();
-    saveSessionCache();
-  }catch(e){alert(e.message)}
+    if (role === 'admin' && s && s.by) {
+      await api('/api/admin/sales/' + s.by + '/' + id, { method: 'DELETE' });
+    } else {
+      await api('/api/sales/' + id, { method: 'DELETE' });
+    }
+  }catch(e){
+    console.warn('delSale notice:', e.message);
+  }
 }
 function clearF(){
   $('sq').value='';
@@ -1238,27 +1148,19 @@ function updateFilterBtn(){
 }
 function getAllAvailableSales() {
   const map = new Map();
-  // 1. Offline queue sales
+  // 1. Confirmed sales from Google Sheet
+  const base = (role === 'admin' && allSales && allSales.length) ? allSales : sales;
+  for (const s of (base || [])) {
+    if (s && s.id != null) {
+      const n = normSale(s);
+      if (n) map.set(String(n.id), n);
+    }
+  }
+  // 2. Unsynced offline queue sales
   for (const s of getOfflineQueue()) {
     if (s && s.id != null) {
       const n = normSale(s);
       if (n) map.set(String(n.id), n);
-    }
-  }
-  // 2. Local user sales
-  for (const s of (sales || [])) {
-    if (s && s.id != null) {
-      const n = normSale(s);
-      if (n) map.set(String(n.id), n);
-    }
-  }
-  // 3. Admin allSales (if logged in as admin)
-  if (role === 'admin' && Array.isArray(allSales)) {
-    for (const s of allSales) {
-      if (s && s.id != null) {
-        const n = normSale(s);
-        if (n) map.set(String(n.id), n);
-      }
     }
   }
   return Array.from(map.values());
@@ -2970,8 +2872,6 @@ function start(d, opts = {}){
     localStorage.setItem('cached_services', JSON.stringify(services));
   }
   fetchServices();
-  sheetConfirmedIds = loadCachedConfirmedIds();
-  sheetIdsFetched = sheetConfirmedIds.size > 0;
   showOnlyNotUploaded = false;
   $('t3').classList.toggle('hide', role !== 'admin');
   $('tBadge').classList.add('hide');
@@ -3031,24 +2931,15 @@ function applyFreshData(d) {
     renderSvc();
   }
   if (d.sales && Array.isArray(d.sales)) {
-    // Preserve local queued sales and recently added entries so they are never lost
+    // Google Sheet (via server) is the confirmed source of truth
+    // Only combine with unsynced offline queue items currently in local storage
     const q = getOfflineQueue();
     const map = new Map();
     for (const s of norm(d.sales)) map.set(String(s.id), s);
-    for (const s of (sales || [])) {
-      if (s && s.id && !map.has(String(s.id))) map.set(String(s.id), normSale(s));
-    }
-    for (const s of q) {
-      if (s && s.id) map.set(String(s.id), normSale(s));
-    }
+    for (const s of q) if (s && s.id) map.set(String(s.id), normSale(s));
     const merged = Array.from(map.values()).sort((a, b) => String(b.date).localeCompare(String(a.date)) || Number(b.id) - Number(a.id));
     sales = merged;
-    if (role === 'admin') {
-      const allMap = new Map();
-      for (const s of (allSales || [])) if (s && s.id) allMap.set(String(s.id), normSale(s));
-      for (const s of merged) allMap.set(String(s.id), s);
-      allSales = Array.from(allMap.values()).sort((a, b) => String(b.date).localeCompare(String(a.date)) || Number(b.id) - Number(a.id));
-    }
+    allSales = merged;
     renderSales();
     stats();
   }
@@ -3059,7 +2950,7 @@ function applyFreshData(d) {
     refreshTeamUsers();
     loadAllSales();
   }
-  setTimeout(fetchSheetIds, 1500);
+  setTimeout(refreshSalesFromSheet, 1500);
   saveSessionCache(d);
 }
 
@@ -3080,8 +2971,6 @@ async function logout(message){
   cart = {};
   allSales = [];
   teamUsers = [];
-  sheetConfirmedIds = new Set();
-  sheetIdsFetched = false;
   showOnlyNotUploaded = false;
 
   const editBtn = $('btnEditShop');
